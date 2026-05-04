@@ -88,9 +88,9 @@ export default function Login() {
           <div className="mb-5 inline-flex h-12 w-50 items-center justify-center ">
             <Image
               src="/logo.png"
-              width={200}
-              className="w-40"
+              width={150}
               height={50}
+              className="w-20"
               alt="Logo"
             />
           </div>

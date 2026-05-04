@@ -326,21 +326,21 @@ function SidebarCore({
             className="flex items-center justify-center w-9 h-9 rounded-sm hover:bg-white/[0.07] transition-colors"
           >
             <Image
-              src="/logo.png"
+              src="/logo.jpg"
               width={24}
               height={24}
               alt="Logo"
-              className="filter brightness-0 invert"
+              className="filter"
             />
           </button>
         ) : (
           <>
             <Image
-              src="/logo.png"
-              width={84}
+              src="/logo.jpg"
+              width={45}
               height={32}
               alt="Logo"
-              className="filter brightness-0 invert"
+              className="filter"
             />
             {isMobile ? (
               <button
