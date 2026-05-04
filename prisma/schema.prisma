@@ -1,0 +1,311 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+  //output = "../src/generated/prisma"
+  moduleFormat = "cjs"
+}
+
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+}
+
+// ───────────────────────────────────────────────────────────────
+// ENUMS
+// ───────────────────────────────────────────────────────────────
+
+enum Role {
+  Master              // Gestão global do sistema
+  Director            // Gestão da sua Direção
+  ChefeDepartamento   // Gestão do seu Departamento
+  Tecnico             // Funcionário avaliável
+}
+
+enum Estado {
+  Activo
+  Inactivo
+}
+
+enum EstadoAvaliacao {
+  Pendente
+  AutoAvaliacao
+  AvaliadoPorChefe
+  EmReavaliacao
+  Reavaliado
+  ValidadoPorDirector
+}
+
+enum TipoAvaliacao {
+  AutoAvaliacao
+  AvaliacaoChefe
+  Reavaliacao
+}
+
+// ───────────────────────────────────────────────────────────────
+// PELOURO
+// ───────────────────────────────────────────────────────────────
+
+model Pelouro {
+  id           String      @id @default(uuid())
+  nome         String      @unique
+  descricao    String?
+  dataCriacao  DateTime    @default(now())
+  updatedAt    DateTime    @updatedAt
+
+  direcoes     Direcao[]
+  utilizadores Utilizador[]
+
+  @@map("pelouro")
+}
+
+// ───────────────────────────────────────────────────────────────
+// DIREÇÃO
+// ───────────────────────────────────────────────────────────────
+
+model Direcao {
+  id           String      @id @default(uuid())
+  nome         String      @unique
+  descricao    String?
+  dataCriacao  DateTime    @default(now())
+  updatedAt    DateTime    @updatedAt
+
+  pelouroId    String
+  pelouro      Pelouro     @relation(fields: [pelouroId], references: [id])
+
+  departamentos Departamento[]
+  utilizadores  Utilizador[]
+
+  @@map("direcao")
+}
+
+// ───────────────────────────────────────────────────────────────
+// DEPARTAMENTO
+// ───────────────────────────────────────────────────────────────
+
+model Departamento {
+  id           String      @id @default(uuid())
+  nome         String
+  dataCriacao  DateTime    @default(now())
+  updatedAt    DateTime    @updatedAt
+
+  direcaoId    String
+  direcao      Direcao     @relation(fields: [direcaoId], references: [id])
+
+  chefeId      String?     @unique
+  chefe        Utilizador? @relation("ChefeDoDepartamento", fields: [chefeId], references: [id])
+
+  utilizadores Utilizador[] @relation("DepartamentoUtilizadores")
+
+  // Relação M:N com Criterio via tabela pivot
+  criterios    CriterioDepartamento[]
+
+  @@map("departamento")
+}
+
+// ───────────────────────────────────────────────────────────────
+// UTILIZADOR
+// ───────────────────────────────────────────────────────────────
+
+model Utilizador {
+  id                   String    @id @default(uuid())
+
+  nomeCompleto         String
+  email                String    @unique
+  numeroMecanografico  String    @unique
+  passwordHash         String
+  cargo                String
+  avatarUrl            String
+
+  role                 Role      @default(Tecnico)
+  estado               Estado    @default(Activo)
+
+  dataAdmissao         DateTime  @default(now())
+  createdAt            DateTime  @default(now())
+  updatedAt            DateTime  @updatedAt
+
+  pelouroId            String?
+  pelouro              Pelouro?      @relation(fields: [pelouroId], references: [id])
+
+  direcaoId            String?
+  direcao              Direcao?      @relation(fields: [direcaoId], references: [id])
+
+  departamentoId       String?
+  departamento         Departamento? @relation("DepartamentoUtilizadores", fields: [departamentoId], references: [id])
+
+  chefeDe              Departamento? @relation("ChefeDoDepartamento")
+
+  fichasComoAvaliado   FichaAvaliacao[]     @relation("FichaAvaliado")
+  submissoesFeitas     SubmissaoAvaliacao[] @relation("SubmissaoAvaliador")
+  reavalacoesIndicadas ReavaliacaoIndicada[] @relation("ReavaliadorIndicado")
+  reavalacoesQueIndicou ReavaliacaoIndicada[] @relation("QuemIndicou")
+  validacoes           ValidacaoDirector[]  @relation("DirectorValidador")
+  criteriosComoTecnico Criterio[]           @relation("CriterioParaTecnico")
+
+  @@map("utilizador")
+}
+
+// ───────────────────────────────────────────────────────────────
+// PERÍODO DE AVALIAÇÃO
+// ───────────────────────────────────────────────────────────────
+
+model PeriodoAvaliacao {
+  id          String    @id @default(uuid())
+  nome        String
+  dataInicio  DateTime
+  dataFim     DateTime
+  activo      Boolean   @default(false)
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  fichas      FichaAvaliacao[]
+
+  @@map("periodo_avaliacao")
+}
+
+// ───────────────────────────────────────────────────────────────
+// CRITÉRIO DE AVALIAÇÃO
+// ───────────────────────────────────────────────────────────────
+
+model Criterio {
+  id          String    @id @default(uuid())
+  nome        String
+  descricao   String?
+  peso        Float     @default(1.0)
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  // Relação M:N com Departamento via tabela pivot
+  departamentos CriterioDepartamento[]
+
+  // Ou scoped a um Técnico específico (individual)
+  tecnicoId   String?
+  tecnico     Utilizador? @relation("CriterioParaTecnico", fields: [tecnicoId], references: [id])
+
+  respostas   CriterioResposta[]
+
+  @@map("criterio")
+}
+
+// ───────────────────────────────────────────────────────────────
+// TABELA PIVOT — CRITÉRIO ↔ DEPARTAMENTO  (M:N)
+// ───────────────────────────────────────────────────────────────
+
+model CriterioDepartamento {
+  criterioId     String
+  criterio       Criterio     @relation(fields: [criterioId], references: [id], onDelete: Cascade)
+
+  departamentoId String
+  departamento   Departamento @relation(fields: [departamentoId], references: [id], onDelete: Cascade)
+
+  @@id([criterioId, departamentoId])
+  @@map("criterio_departamento")
+}
+
+// ───────────────────────────────────────────────────────────────
+// FICHA DE AVALIAÇÃO
+// ───────────────────────────────────────────────────────────────
+
+model FichaAvaliacao {
+  id              String          @id @default(uuid())
+  estado          EstadoAvaliacao @default(Pendente)
+  pontuacaoFinal  Float?
+  createdAt       DateTime        @default(now())
+  updatedAt       DateTime        @updatedAt
+
+  avaliadoId      String
+  avaliado        Utilizador      @relation("FichaAvaliado", fields: [avaliadoId], references: [id])
+
+  periodoId       String
+  periodo         PeriodoAvaliacao @relation(fields: [periodoId], references: [id])
+
+  submissoes      SubmissaoAvaliacao[]
+  reavaliacao     ReavaliacaoIndicada?
+  validacao       ValidacaoDirector?
+
+  @@unique([avaliadoId, periodoId])
+  @@map("ficha_avaliacao")
+}
+
+// ───────────────────────────────────────────────────────────────
+// SUBMISSÃO DE AVALIAÇÃO
+// ───────────────────────────────────────────────────────────────
+
+model SubmissaoAvaliacao {
+  id             String         @id @default(uuid())
+  tipo           TipoAvaliacao
+  comentarios    String?
+  pontuacaoTotal Float?
+  dataSubmissao  DateTime       @default(now())
+
+  fichaId        String
+  ficha          FichaAvaliacao @relation(fields: [fichaId], references: [id], onDelete: Cascade)
+
+  avaliadorId    String
+  avaliador      Utilizador     @relation("SubmissaoAvaliador", fields: [avaliadorId], references: [id])
+
+  respostas      CriterioResposta[]
+
+  @@map("submissao_avaliacao")
+}
+
+// ───────────────────────────────────────────────────────────────
+// CRITÉRIO RESPOSTA
+// ───────────────────────────────────────────────────────────────
+
+model CriterioResposta {
+  id           String             @id @default(uuid())
+  pontuacao    Float
+  observacao   String?
+
+  submissaoId  String
+  submissao    SubmissaoAvaliacao @relation(fields: [submissaoId], references: [id], onDelete: Cascade)
+
+  criterioId   String
+  criterio     Criterio           @relation(fields: [criterioId], references: [id])
+
+  @@unique([submissaoId, criterioId])
+  @@map("criterio_resposta")
+}
+
+// ───────────────────────────────────────────────────────────────
+// REAVALIAÇÃO INDICADA
+// ───────────────────────────────────────────────────────────────
+
+model ReavaliacaoIndicada {
+  id             String         @id @default(uuid())
+  motivacao      String?
+  dataIndicacao  DateTime       @default(now())
+  concluida      Boolean        @default(false)
+
+  fichaId        String         @unique
+  ficha          FichaAvaliacao @relation(fields: [fichaId], references: [id], onDelete: Cascade)
+
+  reavaliadorId  String
+  reavaliador    Utilizador     @relation("ReavaliadorIndicado", fields: [reavaliadorId], references: [id])
+
+  indicadoPorId  String
+  indicadoPor    Utilizador     @relation("QuemIndicou", fields: [indicadoPorId], references: [id])
+
+  @@map("reavaliacao_indicada")
+}
+
+// ───────────────────────────────────────────────────────────────
+// VALIDAÇÃO DO DIRECTOR
+// ───────────────────────────────────────────────────────────────
+
+model ValidacaoDirector {
+  id             String         @id @default(uuid())
+  aprovado       Boolean
+  comentarios    String?
+  dataValidacao  DateTime       @default(now())
+
+  fichaId        String         @unique
+  ficha          FichaAvaliacao @relation(fields: [fichaId], references: [id], onDelete: Cascade)
+
+  directorId     String
+  director       Utilizador     @relation("DirectorValidador", fields: [directorId], references: [id])
+
+  @@map("validacao_director")
+}
