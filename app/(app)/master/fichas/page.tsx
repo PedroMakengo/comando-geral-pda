@@ -352,9 +352,11 @@ export default function FichasPage() {
       ? fichas.filter(
           (f) =>
             f.avaliado.nomeCompleto
-              .toLowerCase()
+              ?.toLowerCase()
               .includes(search.toLowerCase()) ||
-            f.avaliado.email.toLowerCase().includes(search.toLowerCase()),
+            f.avaliado.email
+              ?.toLowerCase() // ← adiciona ?. aqui
+              .includes(search.toLowerCase()),
         )
       : fichas,
     sort,
@@ -800,7 +802,7 @@ export default function FichasPage() {
                           </p>
                           {s.comentarios && (
                             <p className="text-xs text-zinc-600 italic border-l-2 border-zinc-200 pl-2.5 mb-3">
-                              "{s.comentarios}"
+                              &quot;{s.comentarios}&ldquo;
                             </p>
                           )}
                           {s.respostas.length > 0 && (
@@ -854,7 +856,7 @@ export default function FichasPage() {
                     </div>
                     {fichaDetalhe.reavaliacao.motivacao && (
                       <p className="text-xs text-amber-700 italic">
-                        "{fichaDetalhe.reavaliacao.motivacao}"
+                        &quot;{fichaDetalhe.reavaliacao.motivacao}&ldquo;
                       </p>
                     )}
                   </div>
@@ -894,7 +896,7 @@ export default function FichasPage() {
                       <p
                         className={`text-xs mt-2 italic border-l-2 pl-2.5 ${fichaDetalhe.validacao.aprovado ? 'border-emerald-300 text-emerald-700' : 'border-red-300 text-red-700'}`}
                       >
-                        "{fichaDetalhe.validacao.comentarios}"
+                        &quot;{fichaDetalhe.validacao.comentarios}&ldquo;
                       </p>
                     )}
                   </div>
