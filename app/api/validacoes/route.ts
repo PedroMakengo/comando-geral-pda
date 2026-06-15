@@ -45,8 +45,8 @@ export async function GET(req: NextRequest) {
 }
 
 // ── POST /api/validacoes ──────────────────────────────────────
-// Director valida fichas de Técnicos E de Chefes de Departamento
-// Para o Chefe de Departamento, aceita estado "AutoAvaliacao" (sem precisar de reavaliação)
+// Director aprova ou rejeita uma ficha no estado AvaliadoPorChefe.
+// Se rejeitada, a ficha volta a Pendente para o Chefe reaviar.
 export async function POST(req: NextRequest) {
   const auth = requireRole(req, ['Director', 'Master'])
   if (auth instanceof NextResponse) return auth
@@ -73,7 +73,8 @@ export async function POST(req: NextRequest) {
       where: { id: fichaId },
       include: {
         validacao: true,
-        submissoes: { select: { tipo: true, pontuacaoTotal: true } },
+        // submissao singular — @unique fichaId
+        submissao: { select: { pontuacaoTotal: true } },
         avaliado: {
           select: {
             id: true,
@@ -92,50 +93,27 @@ export async function POST(req: NextRequest) {
       )
     }
 
-    // Verificar que o Director é responsável pela direção do avaliado
-    const director = await prisma.utilizador.findUnique({
-      where: { id: payload.sub },
-      select: { direcaoId: true },
-    })
-
-    const direcaoAvaliado =
-      ficha.avaliado.direcaoId ?? ficha.avaliado.departamento?.direcaoId
-
-    // Master pode validar qualquer ficha (incluindo Directores)
     // Director só pode validar fichas da sua Direção
-    if (
-      payload.role !== 'Master' &&
-      director?.direcaoId &&
-      direcaoAvaliado !== director.direcaoId
-    ) {
-      return NextResponse.json(
-        { error: 'Sem permissão para validar fichas fora da sua Direção.' },
-        { status: 403 },
-      )
+    if (payload.role !== 'Master') {
+      const director = await prisma.utilizador.findUnique({
+        where: { id: payload.sub },
+        select: { direcaoId: true },
+      })
+      const direcaoAvaliado =
+        ficha.avaliado.direcaoId ?? ficha.avaliado.departamento?.direcaoId
+      if (director?.direcaoId && direcaoAvaliado !== director.direcaoId) {
+        return NextResponse.json(
+          { error: 'Sem permissão para validar fichas fora da sua Direção.' },
+          { status: 403 },
+        )
+      }
     }
 
-    // ── Estados permitidos por role do avaliado ──────────────
-    // Chefe de Departamento: Director valida directamente após a auto-avaliação
-    //   → estados permitidos: AutoAvaliacao, AvaliadoPorChefe, Reavaliado
-    // Técnico: fluxo normal
-    //   → estados permitidos: AvaliadoPorChefe, Reavaliado
-    const isChefe = ficha.avaliado.role === 'ChefeDepartamento'
-    const isDirector = ficha.avaliado.role === 'Director'
-
-    // Director auto-avaliação é validada pelo Master directamente (como Chefe pelo Director)
-    // ChefeDepartamento: Director valida após AutoAvaliacao
-    // Técnico: fluxo normal — AvaliadoPorChefe ou Reavaliado
-    const estadosPermitidos =
-      isChefe || isDirector
-        ? ['AutoAvaliacao', 'AvaliadoPorChefe', 'Reavaliado']
-        : ['AvaliadoPorChefe', 'Reavaliado']
-
-    if (!estadosPermitidos.includes(ficha.estado)) {
+    // Só é possível validar fichas no estado AvaliadoPorChefe
+    if (ficha.estado !== 'AvaliadoPorChefe') {
       return NextResponse.json(
         {
-          error: isChefe
-            ? `Para Chefes de Departamento, a ficha deve estar em "Auto-avaliação", "Avaliado p/ Chefe" ou "Reavaliado". Estado actual: ${ficha.estado}`
-            : `A ficha deve estar em "AvaliadoPorChefe" ou "Reavaliado". Estado actual: ${ficha.estado}`,
+          error: `A ficha deve estar em "AvaliadoPorChefe" para ser validada. Estado actual: ${ficha.estado}.`,
         },
         { status: 400 },
       )
@@ -148,17 +126,8 @@ export async function POST(req: NextRequest) {
       )
     }
 
-    // Calcular pontuação final — média ponderada das submissões
-    const pontuacoes = ficha.submissoes
-      .map((s) => s.pontuacaoTotal)
-      .filter((p): p is number => p !== null)
-
-    const pontuacaoFinal =
-      pontuacoes.length > 0
-        ? Math.round(
-            (pontuacoes.reduce((a, b) => a + b, 0) / pontuacoes.length) * 100,
-          ) / 100
-        : null
+    // Pontuação final vem directamente da submissão do chefe
+    const pontuacaoFinal = ficha.submissao?.pontuacaoTotal ?? null
 
     const validacao = await prisma.$transaction(async (tx) => {
       const val = await tx.validacaoDirector.create({
@@ -180,10 +149,18 @@ export async function POST(req: NextRequest) {
       await tx.fichaAvaliacao.update({
         where: { id: fichaId },
         data: {
-          estado: 'ValidadoPorDirector',
+          // Aprovado → ValidadoPorDirector | Rejeitado → Pendente (Chefe reavalia)
+          estado: aprovado ? 'ValidadoPorDirector' : 'Pendente',
           pontuacaoFinal: aprovado ? pontuacaoFinal : null,
         },
       })
+
+      // Se rejeitado, apagar a submissão anterior para o Chefe poder submeter de novo
+      if (!aprovado && ficha.submissao) {
+        await tx.submissaoAvaliacao.delete({
+          where: { fichaId },
+        })
+      }
 
       return val
     })

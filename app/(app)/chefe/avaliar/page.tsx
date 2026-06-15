@@ -1,7 +1,13 @@
 'use client'
 
 import { useEffect, useState } from 'react'
-import { CheckCircle2, ClipboardList, Loader2, ChevronLeft } from 'lucide-react'
+import {
+  CheckCircle2,
+  ClipboardList,
+  Loader2,
+  ChevronLeft,
+  ChevronRight,
+} from 'lucide-react'
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar'
 import { Button } from '@/components/ui/button'
 import { Label } from '@/components/ui/label'
@@ -28,6 +34,7 @@ interface Ficha {
     nomeCompleto: string
     cargo: string
     avatarUrl?: string
+    departamento?: { id: string; nome: string } | null
   }
   periodo: { id: string; nome: string }
 }
@@ -38,6 +45,19 @@ function toArray<T>(res: unknown): T[] {
     return (res as any).data
   return []
 }
+async function safeFetch(url: string) {
+  try {
+    const res = await fetch(url, { credentials: 'include' })
+    if (!res.ok) {
+      console.error(`[safeFetch] ${url} → ${res.status}`)
+      return null
+    }
+    return res.json()
+  } catch (e) {
+    console.error(`[safeFetch]`, e)
+    return null
+  }
+}
 
 function getInitials(name: string) {
   return name
@@ -47,7 +67,6 @@ function getInitials(name: string) {
     .map((n) => n[0].toUpperCase())
     .join('')
 }
-
 function Skeleton({ className }: { className?: string }) {
   return <div className={`bg-zinc-100 rounded-md animate-pulse ${className}`} />
 }
@@ -59,17 +78,19 @@ function RatingInput({
   value: number
   onChange: (v: number) => void
 }) {
+  const labels = ['', 'Insuficiente', 'Fraco', 'Suficiente', 'Bom', 'Excelente']
   return (
     <div className="flex gap-1.5">
       {[1, 2, 3, 4, 5].map((n) => (
         <button
           key={n}
           type="button"
+          title={labels[n]}
           onClick={() => onChange(n)}
           className={`h-9 w-9 rounded-lg text-sm font-semibold border transition-all ${
             value === n
-              ? 'bg-blue-600 border-blue-600 text-white shadow-sm shadow-blue-200'
-              : '...'
+              ? 'bg-purple-600 border-purple-600 text-white shadow-sm shadow-purple-200'
+              : 'bg-white border-zinc-200 text-zinc-500 hover:border-purple-300 hover:text-purple-600'
           }`}
         >
           {n}
@@ -96,43 +117,32 @@ export default function AvaliarTecnicosChefePage() {
     async function load() {
       setLoading(true)
       try {
-        // 1. Utilizador logado
-        const resMe = await fetch('/api/auth/me', { credentials: 'include' })
-        const me: AuthUser = await resMe.json()
-        if (!me?.id) return
-        setUser(me)
-
-        // Sem departamento, não há técnicos a avaliar
-        if (!me.departamento?.id) {
+        const me: AuthUser | null = await safeFetch('/api/auth/me')
+        if (!me?.id || !me.departamento?.id) {
           setLoading(false)
           return
         }
+        setUser(me)
 
-        // 2. Período activo
-        const dataPeriodo = await fetch('/api/periodos?activo=true&limit=1', {
-          credentials: 'include',
-        }).then((r) => r.json())
-        const periodos: any[] = toArray(dataPeriodo)
-        const periodo = periodos[0]
+        // Período activo
+        const dataPeriodo = await safeFetch('/api/periodos?activo=true&limit=1')
+        const periodo = toArray<any>(dataPeriodo)[0]
         if (!periodo) {
           setLoading(false)
           return
         }
 
-        // 3. Fichas do departamento do chefe com estado AutoAvaliacao
-        //    e que NÃO sejam do próprio chefe
-        const params = new URLSearchParams()
-        params.set('estado', 'AutoAvaliacao')
-        params.set('periodoId', periodo.id)
-        params.set('departamentoId', me.departamento.id) // ← filtro pelo dept do chefe
-        params.set('limit', '100')
-
-        const dataFichas = await fetch(`/api/fichas?${params}`, {
-          credentials: 'include',
-        }).then((r) => r.json())
+        // Fichas Pendente do departamento — estas são as que o chefe precisa avaliar
+        const params = new URLSearchParams({
+          estado: 'Pendente',
+          periodoId: periodo.id,
+          departamentoId: me.departamento.id,
+          limit: '100',
+        })
+        const dataFichas = await safeFetch(`/api/fichas?${params}`)
         const todas: Ficha[] = toArray(dataFichas)
 
-        // Excluir ficha do próprio chefe (ele é avaliado separadamente)
+        // Excluir ficha do próprio chefe
         setFichas(todas.filter((f) => f.avaliado.id !== me.id))
       } catch (e) {
         console.error('[AVALIAR_TECNICOS]', e)
@@ -151,21 +161,13 @@ export default function AvaliarTecnicosChefePage() {
     setComentarios('')
     setLoadingCrits(true)
     try {
-      // Busca ficha completa para obter o departamentoId do avaliado
-      const fichaDetalhe = await fetch(`/api/fichas/${f.id}`, {
-        credentials: 'include',
-      }).then((r) => r.json())
-      const deptId = fichaDetalhe?.avaliado?.departamento?.id
+      const deptId = f.avaliado.departamento?.id
 
       const [resDept, resInd] = await Promise.all([
         deptId
-          ? fetch(`/api/criterios?departamentoId=${deptId}&limit=100`, {
-              credentials: 'include',
-            }).then((r) => r.json())
-          : Promise.resolve([]),
-        fetch(`/api/criterios?tecnicoId=${f.avaliado.id}&limit=100`, {
-          credentials: 'include',
-        }).then((r) => r.json()),
+          ? safeFetch(`/api/criterios?departamentoId=${deptId}&limit=100`)
+          : null,
+        safeFetch(`/api/criterios?tecnicoId=${f.avaliado.id}&limit=100`),
       ])
 
       const deptArr: Criterio[] = toArray(resDept)
@@ -196,6 +198,7 @@ export default function AvaliarTecnicosChefePage() {
       toast.error('Avalie todos os critérios.')
       return
     }
+
     setSubmitting(true)
     try {
       const res = await fetch('/api/submissoes', {
@@ -204,7 +207,7 @@ export default function AvaliarTecnicosChefePage() {
         credentials: 'include',
         body: JSON.stringify({
           fichaId: fichaActiva.id,
-          tipo: 'AvaliacaoChefe',
+          // "tipo" removido do schema — a API aceita só fichaId + comentarios + respostas
           comentarios: comentarios.trim() || null,
           respostas: criterios.map((c) => ({
             criterioId: c.id,
@@ -217,8 +220,9 @@ export default function AvaliarTecnicosChefePage() {
         toast.error(data.error ?? 'Erro ao submeter.')
         return
       }
+
       toast.success(
-        `Avaliação de ${fichaActiva.avaliado.nomeCompleto} submetida!`,
+        `Avaliação de ${fichaActiva.avaliado.nomeCompleto.split(' ')[0]} submetida!`,
       )
       setAvaliadas((prev) => new Set([...prev, fichaActiva.id]))
       setFichaActiva(null)
@@ -229,7 +233,7 @@ export default function AvaliarTecnicosChefePage() {
 
   if (loading) {
     return (
-      <div className="p-6 space-y-4 max-w-2xl">
+      <div className="space-y-4 max-w-6xl p-6">
         <Skeleton className="h-10 w-64" />
         {Array.from({ length: 3 }).map((_, i) => (
           <Skeleton key={i} className="h-20" />
@@ -241,7 +245,8 @@ export default function AvaliarTecnicosChefePage() {
   // ── Vista de avaliação de um técnico ──────────────────────
   if (fichaActiva) {
     return (
-      <div className="p-6 max-w-2xl space-y-6">
+      <div className="max-w-6xl space-y-6">
+        {/* Header */}
         <div className="flex items-center gap-3">
           <button
             onClick={() => setFichaActiva(null)}
@@ -303,6 +308,9 @@ export default function AvaliarTecnicosChefePage() {
               <ClipboardList className="h-8 w-8 text-zinc-300 mx-auto mb-2" />
               <p className="text-sm text-zinc-400">
                 Nenhum critério definido para este técnico.
+              </p>
+              <p className="text-xs text-zinc-300 mt-1">
+                Contacte o administrador para criar critérios.
               </p>
             </div>
           ) : (
@@ -385,7 +393,7 @@ export default function AvaliarTecnicosChefePage() {
           {!user?.departamento
             ? 'Sem departamento associado'
             : pendentes.length === 0
-              ? 'Nenhum técnico aguarda avaliação no seu departamento'
+              ? 'Todos os técnicos do departamento foram avaliados'
               : `${pendentes.length} técnico${pendentes.length !== 1 ? 's' : ''} aguarda${pendentes.length === 1 ? '' : 'm'} avaliação`}
         </p>
       </div>
@@ -402,13 +410,13 @@ export default function AvaliarTecnicosChefePage() {
           <CheckCircle2 className="h-12 w-12 text-emerald-400 mx-auto mb-3" />
           <p className="text-sm font-medium text-zinc-600">
             {fichas.length === 0
-              ? 'Nenhum técnico do seu departamento submeteu a auto-avaliação ainda'
+              ? 'Nenhuma ficha pendente no departamento'
               : 'Todos os técnicos do departamento foram avaliados'}
           </p>
           <p className="text-xs text-zinc-400 mt-1">
             {fichas.length === 0
-              ? 'Aguarde que os técnicos submetam as suas auto-avaliações.'
-              : 'Não há fichas pendentes de avaliação no departamento.'}
+              ? 'Quando o administrador criar fichas para o período activo, aparecerão aqui.'
+              : 'Não há fichas pendentes de avaliação.'}
           </p>
         </div>
       ) : (
@@ -432,17 +440,16 @@ export default function AvaliarTecnicosChefePage() {
                 <p className="text-xs text-zinc-500">{f.avaliado.cargo}</p>
               </div>
               <div className="flex items-center gap-2 shrink-0">
-                <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-medium bg-blue-50 text-blue-700">
-                  Auto-avaliação submetida
+                <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-[11px] font-semibold border bg-zinc-100 text-zinc-600 border-zinc-200">
+                  Pendente
                 </span>
-                <ChevronLeft className="h-4 w-4 text-zinc-300 rotate-180" />
+                <ChevronRight className="h-4 w-4 text-zinc-300" />
               </div>
             </button>
           ))}
         </div>
       )}
 
-      {/* Avaliações submetidas nesta sessão */}
       {avaliadas.size > 0 && (
         <div className="rounded-md border border-emerald-200 bg-emerald-50 p-4 text-center">
           <CheckCircle2 className="h-6 w-6 text-emerald-500 mx-auto mb-1.5" />

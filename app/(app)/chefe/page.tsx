@@ -7,7 +7,6 @@ import {
   FileText,
   CheckCircle2,
   Clock,
-  RotateCcw,
   Activity,
   ArrowRight,
   ChevronRight,
@@ -50,16 +49,7 @@ interface Ficha {
     departamento?: { id: string; nome: string } | null
   }
   periodo: { id: string; nome: string }
-  _count?: { submissoes: number }
-}
-interface ReavaliacaoPendente {
-  id: string
-  ficha: {
-    avaliado: { id: string; nomeCompleto: string; cargo: string }
-    periodo: { id: string; nome: string }
-  }
-  reavaliador: { id: string; nomeCompleto: string }
-  dataIndicacao: string
+  submissao?: { pontuacaoTotal?: number | null } | null
 }
 interface Utilizador {
   id: string
@@ -74,8 +64,8 @@ interface DashboardData {
   totalTecnicos: number
   fichasConcluidas: number
   fichasPendentes: number
+  // fichas no estado Pendente (sem submissão) — chefe precisa de avaliar
   fichasParaAvaliar: Ficha[]
-  reavaliacoesPendentes: ReavaliacaoPendente[]
   tecnicosSemFicha: Utilizador[]
   progresso: number
 }
@@ -86,6 +76,20 @@ function toArray<T>(res: unknown): T[] {
     return (res as any).data
   return []
 }
+async function safeFetch(url: string) {
+  try {
+    const res = await fetch(url, { credentials: 'include' })
+    if (!res.ok) {
+      console.error(`[safeFetch] ${url} → ${res.status}`)
+      return null
+    }
+    return res.json()
+  } catch (e) {
+    console.error(`[safeFetch] ${url}`, e)
+    return null
+  }
+}
+
 function getInitials(name: string) {
   return name
     .split(' ')
@@ -107,30 +111,19 @@ function diasRestantes(dataFim: string) {
   )
 }
 
-const estadoConfig: Record<string, { label: string; class: string }> = {
+// Apenas os 3 estados actuais
+const estadoConfig: Record<string, { label: string; cls: string }> = {
   Pendente: {
     label: 'Pendente',
-    class: 'bg-zinc-100 text-zinc-600 border-zinc-200',
-  },
-  AutoAvaliacao: {
-    label: 'Auto-avaliação',
-    class: 'bg-blue-50 text-blue-700 border-blue-200',
+    cls: 'bg-zinc-100 text-zinc-600 border-zinc-200',
   },
   AvaliadoPorChefe: {
     label: 'Avaliado',
-    class: 'bg-purple-50 text-purple-700 border-purple-200',
-  },
-  EmReavaliacao: {
-    label: 'Em Reavaliação',
-    class: 'bg-amber-50 text-amber-700 border-amber-200',
-  },
-  Reavaliado: {
-    label: 'Reavaliado',
-    class: 'bg-orange-50 text-orange-700 border-orange-200',
+    cls: 'bg-purple-50 text-purple-700 border-purple-200',
   },
   ValidadoPorDirector: {
     label: 'Validado',
-    class: 'bg-emerald-50 text-emerald-700 border-emerald-200',
+    cls: 'bg-emerald-50 text-emerald-700 border-emerald-200',
   },
 }
 
@@ -147,67 +140,54 @@ export default function HomeChefePage() {
     async function load() {
       setLoading(true)
       try {
-        const me: AuthUser = await fetch('/api/auth/me', {
-          credentials: 'include',
-        }).then((r) => r.json())
+        const me: AuthUser | null = await safeFetch('/api/auth/me')
         if (!me?.id) return
         setUser(me)
 
-        const [resPeriodo, resFichas, resReav, resTecnicos] = await Promise.all(
-          [
-            fetch('/api/periodos?activo=true&limit=1', {
-              credentials: 'include',
-            }),
-            me.departamento?.id
-              ? fetch(
-                  `/api/fichas?departamentoId=${me.departamento.id}&limit=200`,
-                  { credentials: 'include' },
-                )
-              : Promise.resolve(null),
-            fetch('/api/reavaliacoes?concluida=false&limit=50', {
-              credentials: 'include',
-            }),
-            me.departamento?.id
-              ? fetch(
-                  `/api/utilizadores?departamentoId=${me.departamento.id}&limit=100`,
-                  { credentials: 'include' },
-                )
-              : Promise.resolve(null),
-          ],
-        )
+        const [dataPeriodo, dataFichas, dataTecnicos] = await Promise.all([
+          safeFetch('/api/periodos?activo=true&limit=1'),
+          me.departamento?.id
+            ? safeFetch(
+                `/api/fichas?departamentoId=${me.departamento.id}&limit=200`,
+              )
+            : null,
+          me.departamento?.id
+            ? safeFetch(
+                `/api/utilizadores?departamentoId=${me.departamento.id}&role=Tecnico&limit=100`,
+              )
+            : null,
+        ])
 
-        const periodos: Periodo[] = toArray(await resPeriodo.json())
-        const fichas: Ficha[] = toArray(resFichas ? await resFichas.json() : [])
-        const reavaliacoes: ReavaliacaoPendente[] = toArray(
-          await resReav.json(),
-        )
-        const tecnicos: Utilizador[] = toArray(
-          resTecnicos ? await resTecnicos.json() : [],
-        )
+        const periodos: Periodo[] = toArray(dataPeriodo)
+        const fichas: Ficha[] = toArray(dataFichas)
+        const tecnicos: Utilizador[] = toArray(dataTecnicos)
         const periodo = periodos[0] ?? null
 
+        // Separar ficha do próprio chefe das fichas dos técnicos
         const fichasMinhaConta = periodo
           ? (fichas.find(
               (f) => f.avaliado.id === me.id && f.periodo.id === periodo.id,
             ) ?? null)
           : null
+
         const fichasDept = fichas.filter((f) => f.avaliado.id !== me.id)
         const fichasPeriodo = periodo
           ? fichasDept.filter((f) => f.periodo.id === periodo.id)
           : fichasDept
+
         const fichasConcluidas = fichasPeriodo.filter(
           (f) => f.estado === 'ValidadoPorDirector',
         ).length
-        const fichasPendentes = fichasPeriodo.filter(
-          (f) => f.estado !== 'ValidadoPorDirector',
-        ).length
+        // Fichas Pendente = sem avaliação do chefe — são estas que ele precisa de tratar
         const fichasParaAvaliar = fichasPeriodo
-          .filter((f) => f.estado === 'AutoAvaliacao')
+          .filter((f) => f.estado === 'Pendente')
           .slice(0, 5)
+
         const comFicha = new Set(fichasPeriodo.map((f) => f.avaliado.id))
         const tecnicosSemFicha = tecnicos
           .filter((t) => t.id !== me.id && !comFicha.has(t.id))
           .slice(0, 5)
+
         const progresso =
           fichasPeriodo.length > 0
             ? Math.round((fichasConcluidas / fichasPeriodo.length) * 100)
@@ -219,9 +199,10 @@ export default function HomeChefePage() {
           fichasMinhaConta,
           totalTecnicos: tecnicos.filter((t) => t.id !== me.id).length,
           fichasConcluidas,
-          fichasPendentes,
+          fichasPendentes: fichasPeriodo.filter(
+            (f) => f.estado !== 'ValidadoPorDirector',
+          ).length,
           fichasParaAvaliar,
-          reavaliacoesPendentes: reavaliacoes,
           tecnicosSemFicha,
           progresso,
         })
@@ -245,19 +226,15 @@ export default function HomeChefePage() {
         </div>
         <Skeleton className="h-20" />
         <Skeleton className="h-44" />
-        <Skeleton className="h-36" />
       </div>
     )
 
   if (!user || !data) return null
 
   const dias = data.periodo ? diasRestantes(data.periodo.dataFim) : 0
-  const passosMinhaFicha = [
-    'Pendente',
-    'AutoAvaliacao',
-    'AvaliadoPorChefe',
-    'ValidadoPorDirector',
-  ]
+
+  // Passos do novo fluxo (sem auto-avaliação)
+  const passosFluxo = ['Pendente', 'AvaliadoPorChefe', 'ValidadoPorDirector']
 
   const stats = [
     {
@@ -290,25 +267,19 @@ export default function HomeChefePage() {
         data.fichasParaAvaliar.length > 0 ? 'bg-purple-400' : 'bg-zinc-300',
     },
     {
-      label: 'Reavaliações',
-      value: data.reavaliacoesPendentes.length,
-      icon: <RotateCcw className="h-4 w-4" />,
-      bg:
-        data.reavaliacoesPendentes.length > 0
-          ? 'bg-amber-50 border-amber-200'
-          : 'bg-zinc-50 border-zinc-200',
-      color:
-        data.reavaliacoesPendentes.length > 0
-          ? 'text-amber-600'
-          : 'text-zinc-400',
-      accent:
-        data.reavaliacoesPendentes.length > 0 ? 'bg-amber-400' : 'bg-zinc-300',
+      label: 'Pendentes director',
+      value: data.fichasDoDept.filter((f) => f.estado === 'AvaliadoPorChefe')
+        .length,
+      icon: <Clock className="h-4 w-4" />,
+      bg: 'bg-blue-50 border-blue-200',
+      color: 'text-blue-600',
+      accent: 'bg-blue-400',
     },
   ]
 
   return (
     <div className="space-y-6">
-      {/* ── Boas-vindas ── */}
+      {/* Boas-vindas */}
       <Card className="border-zinc-200 shadow-sm overflow-hidden">
         <div className="h-[3px] bg-gradient-to-r from-purple-400 via-violet-400 to-indigo-400" />
         <CardContent className="p-4">
@@ -340,7 +311,7 @@ export default function HomeChefePage() {
         </CardContent>
       </Card>
 
-      {/* ── Período activo ── */}
+      {/* Período activo */}
       {data.periodo ? (
         <Card className="border-indigo-200 shadow-none bg-indigo-50/60">
           <CardContent className="p-4">
@@ -389,7 +360,7 @@ export default function HomeChefePage() {
         </Card>
       )}
 
-      {/* ── Minha avaliação ── */}
+      {/* Minha avaliação (ficha do próprio chefe) */}
       {data.periodo && (
         <Card className="border-zinc-200 shadow-none">
           <CardContent className="p-4">
@@ -408,13 +379,12 @@ export default function HomeChefePage() {
             ) : (
               (() => {
                 const est = estadoConfig[data.fichasMinhaConta.estado]
-                const idx = passosMinhaFicha.indexOf(
-                  data.fichasMinhaConta.estado,
-                )
+                const idx = passosFluxo.indexOf(data.fichasMinhaConta.estado)
                 return (
                   <div className="space-y-2">
+                    {/* Barra de progresso do fluxo */}
                     <div className="flex items-center gap-1">
-                      {passosMinhaFicha.map((_, i) => (
+                      {passosFluxo.map((_, i) => (
                         <div
                           key={i}
                           className={`h-1.5 flex-1 rounded-full transition-all ${i <= idx ? 'bg-indigo-500' : 'bg-zinc-100'}`}
@@ -423,23 +393,13 @@ export default function HomeChefePage() {
                     </div>
                     <div className="flex items-center justify-between">
                       <p className="text-xs text-zinc-500">Estado actual</p>
-                      <div className="flex items-center gap-2">
-                        {est && (
-                          <span
-                            className={`text-[11px] font-semibold px-2.5 py-0.5 rounded-full border ${est.class}`}
-                          >
-                            {est.label}
-                          </span>
-                        )}
-                        {data.fichasMinhaConta.estado === 'Pendente' && (
-                          <Link
-                            href="/chefe/auto-avaliacao"
-                            className="flex items-center gap-1 text-xs font-semibold text-indigo-600 hover:text-indigo-800 bg-indigo-50 border border-indigo-200 px-3 py-1 rounded-lg transition-colors"
-                          >
-                            Avaliar <ArrowRight className="h-3 w-3" />
-                          </Link>
-                        )}
-                      </div>
+                      {est && (
+                        <span
+                          className={`text-[11px] font-semibold px-2.5 py-0.5 rounded-full border ${est.cls}`}
+                        >
+                          {est.label}
+                        </span>
+                      )}
                     </div>
                   </div>
                 )
@@ -449,7 +409,7 @@ export default function HomeChefePage() {
         </Card>
       )}
 
-      {/* ── Stats ── */}
+      {/* Stats */}
       <div className="grid grid-cols-2 gap-3">
         {stats.map((s, i) => (
           <Card
@@ -472,7 +432,7 @@ export default function HomeChefePage() {
         ))}
       </div>
 
-      {/* ── Progresso do departamento ── */}
+      {/* Progresso do departamento */}
       {data.fichasDoDept.length > 0 && (
         <Card className="border-zinc-200 shadow-none">
           <CardContent className="p-4">
@@ -500,7 +460,7 @@ export default function HomeChefePage() {
         </Card>
       )}
 
-      {/* ── Técnicos a aguardar avaliação ── */}
+      {/* Técnicos a aguardar avaliação (estado Pendente) */}
       {data.fichasParaAvaliar.length > 0 && (
         <Card className="border-purple-200 shadow-sm overflow-hidden">
           <div className="h-[3px] bg-gradient-to-r from-purple-400 to-violet-400" />
@@ -530,9 +490,10 @@ export default function HomeChefePage() {
             </div>
             <div className="space-y-2">
               {data.fichasParaAvaliar.map((f) => (
-                <div
+                <Link
                   key={f.id}
-                  className="group flex items-center gap-3 rounded-xl bg-white border border-purple-100 hover:border-purple-200 px-4 py-3 transition-colors"
+                  href={`/chefe/avaliar`}
+                  className="group flex items-center gap-3 rounded-xl bg-white border border-purple-100 hover:border-purple-300 px-4 py-3 transition-colors"
                 >
                   <Avatar className="h-8 w-8 shrink-0 ring-1 ring-zinc-200">
                     <AvatarImage src={f.avaliado.avatarUrl} />
@@ -548,73 +509,18 @@ export default function HomeChefePage() {
                       {f.avaliado.cargo}
                     </p>
                   </div>
-                  <span className="text-[11px] font-semibold px-2.5 py-0.5 rounded-full border bg-blue-50 text-blue-700 border-blue-200 shrink-0">
-                    Auto-av. submetida
+                  <span className="text-[11px] font-semibold px-2.5 py-0.5 rounded-full border bg-zinc-100 text-zinc-600 border-zinc-200 shrink-0">
+                    Pendente
                   </span>
                   <ChevronRight className="h-3.5 w-3.5 text-zinc-300 group-hover:text-purple-400 transition-colors" />
-                </div>
+                </Link>
               ))}
             </div>
           </CardContent>
         </Card>
       )}
 
-      {/* ── Reavaliações em curso ── */}
-      {data.reavaliacoesPendentes.length > 0 && (
-        <Card className="border-amber-200 shadow-none bg-amber-50/40">
-          <CardContent className="p-5">
-            <div className="flex items-center justify-between mb-4">
-              <div className="flex items-center gap-2.5">
-                <div className="h-8 w-8 rounded-lg bg-amber-100 flex items-center justify-center">
-                  <RotateCcw className="h-4 w-4 text-amber-600" />
-                </div>
-                <div>
-                  <p className="text-sm font-semibold text-amber-900">
-                    Reavaliações em curso
-                  </p>
-                  <p className="text-[11px] text-amber-600 mt-0.5">
-                    {data.reavaliacoesPendentes.length} pendente
-                    {data.reavaliacoesPendentes.length !== 1 ? 's' : ''}
-                  </p>
-                </div>
-              </div>
-              <Link
-                href="/chefe/reavaliacoes"
-                className="flex items-center gap-1 text-xs text-amber-700 hover:text-amber-900 font-medium transition-colors"
-              >
-                Ver todas <ArrowRight className="h-3.5 w-3.5" />
-              </Link>
-            </div>
-            <div className="space-y-2">
-              {data.reavaliacoesPendentes.slice(0, 3).map((r) => (
-                <div
-                  key={r.id}
-                  className="flex items-center justify-between rounded-xl bg-white border border-amber-100 px-4 py-3"
-                >
-                  <div className="min-w-0">
-                    <p className="text-sm font-medium text-zinc-900 truncate">
-                      {r.ficha.avaliado.nomeCompleto}
-                    </p>
-                    <p className="text-[11px] text-zinc-400">
-                      {r.ficha.periodo.nome}
-                    </p>
-                  </div>
-                  <div className="text-right shrink-0 ml-3">
-                    <p className="text-[10px] text-zinc-400 uppercase tracking-wide">
-                      Reavaliador
-                    </p>
-                    <p className="text-xs font-semibold text-amber-700">
-                      {r.reavaliador.nomeCompleto.split(' ')[0]}
-                    </p>
-                  </div>
-                </div>
-              ))}
-            </div>
-          </CardContent>
-        </Card>
-      )}
-
-      {/* ── Técnicos sem ficha ── */}
+      {/* Técnicos sem ficha */}
       {data.tecnicosSemFicha.length > 0 && (
         <Card className="border-red-200 shadow-none bg-red-50/40">
           <CardContent className="p-5">
@@ -659,15 +565,9 @@ export default function HomeChefePage() {
         </Card>
       )}
 
-      {/* ── Atalhos ── */}
+      {/* Atalhos */}
       <div className="grid grid-cols-2 gap-3">
         {[
-          {
-            label: 'Auto-avaliação',
-            href: '/chefe/auto-avaliacao',
-            icon: <ClipboardList className="h-4 w-4 text-indigo-500" />,
-            desc: 'Submeter minha avaliação',
-          },
           {
             label: 'Avaliar Técnicos',
             href: '/chefe/avaliar',
@@ -675,17 +575,23 @@ export default function HomeChefePage() {
             desc: 'Avaliar técnicos do dept.',
           },
           {
-            label: 'Reavaliações',
-            href: '/chefe/reavaliacoes',
-            icon: <RotateCcw className="h-4 w-4 text-amber-500" />,
-            desc: 'Indicar reavaliadores',
-          },
-          {
             label: 'Fichas',
             href: '/chefe/fichas',
             icon: <FileText className="h-4 w-4 text-zinc-500" />,
             desc: 'Ver fichas do departamento',
           },
+          // {
+          //   label: 'Minha avaliação',
+          //   href: '/chefe/avaliacao',
+          //   icon: <ClipboardList className="h-4 w-4 text-indigo-500" />,
+          //   desc: 'Ver a minha ficha',
+          // },
+          // {
+          //   label: 'Departamento',
+          //   href: '/chefe/equipa',
+          //   icon: <Users className="h-4 w-4 text-blue-500" />,
+          //   desc: 'Membros da equipa',
+          // },
         ].map((a, i) => (
           <Link
             key={i}

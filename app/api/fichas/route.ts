@@ -4,7 +4,6 @@ import { prisma } from '@/lib/prisma'
 import { requireRole, getPayloadFromRequest } from '@/lib/permissions'
 
 // ── GET /api/fichas ───────────────────────────────────────────
-// ?periodoId= ?avaliadoId= ?estado= ?departamentoId= ?page= ?limit=
 export async function GET(req: NextRequest) {
   const auth = requireRole(req, [
     'Master',
@@ -25,60 +24,38 @@ export async function GET(req: NextRequest) {
   const limit = Math.min(100, Number(searchParams.get('limit') ?? 20))
   const skip = (page - 1) * limit
 
-  // ── Filtro base por avaliado ──────────────────────────────
-  // Técnico só vê as próprias fichas
   const avaliadoFiltro =
     payload.role === 'Tecnico' ? payload.sub : (avaliadoId ?? undefined)
 
-  // ── Director: filtrar pela sua Direção ────────────────────
-  // O Director vê fichas de todos os utilizadores da sua Direção
-  // (inclui Técnicos e Chefes de Departamento da direção dele)
-  let direcaoFiltro: string | undefined = undefined
+  let direcaoFiltro: string | undefined
   if (payload.role === 'Director') {
     const director = await prisma.utilizador.findUnique({
       where: { id: payload.sub },
       select: { direcaoId: true },
     })
-    if (director?.direcaoId) {
-      direcaoFiltro = director.direcaoId
-    }
+    direcaoFiltro = director?.direcaoId ?? undefined
   }
 
-  // ── Chefe de Departamento: filtrar pelo seu departamento ──
-  let chefeDeptFiltro: string | undefined = undefined
+  let chefeDeptFiltro: string | undefined
   if (payload.role === 'ChefeDepartamento') {
     const chefe = await prisma.utilizador.findUnique({
       where: { id: payload.sub },
       select: { departamentoId: true },
     })
-    if (chefe?.departamentoId) {
-      chefeDeptFiltro = chefe.departamentoId
-    }
+    chefeDeptFiltro = chefe?.departamentoId ?? undefined
   }
 
   const where = {
-    // Filtro por avaliado específico (ou próprio utilizador se Técnico)
     ...(avaliadoFiltro && { avaliadoId: avaliadoFiltro }),
-
-    // Filtro por período
     ...(periodoId && { periodoId }),
-
-    // Filtro por estado
     ...(estado && { estado: estado as any }),
-
-    // Filtro por departamento (passado via query param, ou do Chefe)
     ...((departamentoId || chefeDeptFiltro) && {
-      avaliado: {
-        departamentoId: departamentoId ?? chefeDeptFiltro,
-      },
+      avaliado: { departamentoId: departamentoId ?? chefeDeptFiltro },
     }),
-
-    // Filtro por direção (Director vê toda a sua direção)
     ...(direcaoFiltro &&
       !avaliadoFiltro && {
         avaliado: {
           direcaoId: direcaoFiltro,
-          // Aplicar departamentoId se passado via query param
           ...(departamentoId && { departamentoId }),
         },
       }),
@@ -110,11 +87,43 @@ export async function GET(req: NextRequest) {
           },
         },
         periodo: {
-          select: { id: true, nome: true, dataInicio: true, dataFim: true },
+          select: {
+            id: true,
+            nome: true,
+            dataInicio: true,
+            dataFim: true,
+            activo: true,
+          },
         },
-        _count: { select: { submissoes: true } },
-        validacao: { select: { aprovado: true, dataValidacao: true } },
-        reavaliacao: { select: { concluida: true, reavaliadorId: true } },
+        // submissao singular — inclui respostas para o card expansível
+        submissao: {
+          select: {
+            id: true,
+            comentarios: true,
+            pontuacaoTotal: true,
+            dataSubmissao: true,
+            avaliador: { select: { id: true, nomeCompleto: true } },
+            respostas: {
+              select: {
+                id: true,
+                pontuacao: true,
+                observacao: true,
+                criterio: {
+                  select: { id: true, nome: true, peso: true, descricao: true },
+                },
+              },
+              orderBy: { criterio: { nome: 'asc' } },
+            },
+          },
+        },
+        validacao: {
+          select: {
+            aprovado: true,
+            comentarios: true,
+            dataValidacao: true,
+            director: { select: { id: true, nomeCompleto: true } },
+          },
+        },
       },
     }),
   ])
@@ -126,7 +135,6 @@ export async function GET(req: NextRequest) {
 }
 
 // ── POST /api/fichas ──────────────────────────────────────────
-// Apenas Master cria fichas (no início do período)
 export async function POST(req: NextRequest) {
   const auth = requireRole(req, ['Master'])
   if (auth instanceof NextResponse) return auth
@@ -150,7 +158,7 @@ export async function POST(req: NextRequest) {
         { status: 404 },
       )
     }
-    if (!['Tecnico', 'ChefeDepartamento', 'Director'].includes(avaliado.role)) {
+    if (avaliado.role === 'Master') {
       return NextResponse.json(
         { error: 'Masters não podem ser avaliados.' },
         { status: 400 },
@@ -178,7 +186,7 @@ export async function POST(req: NextRequest) {
     })
     if (existe) {
       return NextResponse.json(
-        { error: 'Já existe uma ficha para este técnico neste período.' },
+        { error: 'Já existe uma ficha para este utilizador neste período.' },
         { status: 409 },
       )
     }

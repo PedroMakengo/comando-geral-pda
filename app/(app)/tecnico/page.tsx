@@ -405,23 +405,6 @@ export default function HomePageTecnico() {
                   </div>
                 </div>
 
-                {fichaActiva.estado === 'Pendente' && (
-                  <Link
-                    href="/tecnico/auto-avaliacao"
-                    className="mt-4 flex items-center justify-between p-3.5 rounded-xl bg-blue-50 border border-blue-200 hover:bg-blue-100 transition-colors group"
-                  >
-                    <div>
-                      <p className="text-sm font-semibold text-blue-800">
-                        Submeter auto-avaliação
-                      </p>
-                      <p className="text-xs text-blue-600 mt-0.5">
-                        A sua avaliação está pendente.
-                      </p>
-                    </div>
-                    <ArrowRight className="h-4 w-4 text-blue-400 group-hover:text-blue-600 transition-colors shrink-0" />
-                  </Link>
-                )}
-
                 {fichaActiva.estado === 'ValidadoPorDirector' &&
                   fichaActiva.pontuacaoFinal != null && (
                     <div className="mt-4 flex items-center gap-4 p-3.5 rounded-xl bg-emerald-50 border border-emerald-200">
@@ -553,12 +536,6 @@ export default function HomePageTecnico() {
       {/* ── Atalhos ── */}
       <div className="grid grid-cols-2 gap-3">
         {[
-          {
-            label: 'Auto-avaliação',
-            href: '/tecnico/auto-avaliacao',
-            icon: <CheckCircle2 className="h-4 w-4 text-blue-500" />,
-            desc: 'Submeter avaliação',
-          },
           {
             label: 'Minhas Fichas',
             href: '/tecnico/fichas',

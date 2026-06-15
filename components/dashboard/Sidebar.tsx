@@ -22,6 +22,7 @@ import {
   ChevronLeft,
   X,
   TrendingUp,
+  Star,
 } from 'lucide-react'
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar'
 import Image from 'next/image'
@@ -111,9 +112,9 @@ const menuSections: Record<string, MenuSection[]> = {
       title: 'Avaliação',
       items: [
         {
-          label: 'Auto-avaliação',
-          href: '/director/auto-avaliacao',
-          icon: <Gauge size={15} />,
+          label: 'Avaliar Chefes',
+          href: '/director/avaliar-chefes',
+          icon: <Star />,
         },
         {
           label: 'Critérios',
@@ -124,11 +125,6 @@ const menuSections: Record<string, MenuSection[]> = {
           label: 'Fichas',
           href: '/director/fichas',
           icon: <FileText size={15} />,
-        },
-        {
-          label: 'Reavaliações',
-          href: '/director/reavaliacoes',
-          icon: <RefreshCw size={15} />,
         },
         {
           label: 'Validações',
@@ -159,19 +155,9 @@ const menuSections: Record<string, MenuSection[]> = {
       title: 'Avaliação',
       items: [
         {
-          label: 'Auto-avaliação',
-          href: '/chefe/auto-avaliacao',
-          icon: <Gauge size={15} />,
-        },
-        {
           label: 'Avaliar Técnicos',
           href: '/chefe/avaliar',
           icon: <UserCheck size={15} />,
-        },
-        {
-          label: 'Reavaliações',
-          href: '/chefe/reavaliacoes',
-          icon: <RefreshCw size={15} />,
         },
         {
           label: 'Fichas',
@@ -182,6 +168,11 @@ const menuSections: Record<string, MenuSection[]> = {
           label: 'Histórico',
           href: '/chefe/historico',
           icon: <BarChart2 size={15} />,
+        },
+        {
+          label: 'Técnicos',
+          href: '/chefe/tecnicos',
+          icon: <Users size={15} />,
         },
       ],
     },
@@ -203,16 +194,6 @@ const menuSections: Record<string, MenuSection[]> = {
     {
       title: 'Avaliação',
       items: [
-        {
-          label: 'Auto-avaliação',
-          href: '/tecnico/auto-avaliacao',
-          icon: <Gauge size={15} />,
-        },
-        {
-          label: 'Reavaliação',
-          href: '/tecnico/reavaliacao',
-          icon: <RefreshCw size={15} />,
-        },
         {
           label: 'Minhas Fichas',
           href: '/tecnico/fichas',
@@ -302,7 +283,7 @@ function SidebarCore({
       style={{ width: isCollapsed ? '68px' : '264px' }}
       className="
         relative h-full flex flex-col bg-[#0e0f11]
-        border-r border-white/[0.05]
+        border-r border-white/5
         transition-[width] duration-300 ease-in-out overflow-hidden select-none
       "
     >
@@ -317,7 +298,7 @@ function SidebarCore({
 
       {/* Cabeçalho */}
       <div
-        className={`flex items-center h-[56px] shrink-0 px-4 ${isCollapsed ? 'justify-center' : 'justify-between'}`}
+        className={`flex items-center h-14 shrink-0 px-4 ${isCollapsed ? 'justify-center' : 'justify-between'}`}
       >
         {isCollapsed ? (
           <button
@@ -326,8 +307,8 @@ function SidebarCore({
             className="flex items-center justify-center w-9 h-9 rounded-sm hover:bg-white/[0.07] transition-colors"
           >
             <Image
-              src="/logo.jpg"
-              width={24}
+              src="/logo-dashboard.png"
+              width={80}
               height={24}
               alt="Logo"
               className="filter"
@@ -336,11 +317,11 @@ function SidebarCore({
         ) : (
           <>
             <Image
-              src="/logo.jpg"
-              width={45}
+              src="/logo-dashboard.png"
+              width={60}
               height={32}
               alt="Logo"
-              className="filter"
+              className="filter w-10"
             />
             {isMobile ? (
               <button

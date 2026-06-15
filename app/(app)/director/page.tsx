@@ -7,7 +7,6 @@ import {
   FileText,
   CheckCircle2,
   Clock,
-  RotateCcw,
   TrendingUp,
   ArrowRight,
   ClipboardList,
@@ -50,31 +49,35 @@ interface Ficha {
   }
   periodo: { id: string; nome: string }
 }
-interface ReavaliacaoPendente {
-  id: string
-  ficha: {
-    avaliado: { id: string; nomeCompleto: string; cargo: string }
-    periodo: { id: string; nome: string }
-  }
-  reavaliador: { id: string; nomeCompleto: string }
-  dataIndicacao: string
-}
 interface DashboardData {
   periodo: Periodo | null
   totalFichas: number
-  fichasPendentesValidacao: number
-  fichasValidadas: number
-  fichasEmReavaliacao: number
-  reavaliacoesPendentes: ReavaliacaoPendente[]
+  fichasPendentesValidacao: number // AvaliadoPorChefe — aguardam o Director
+  fichasValidadas: number // ValidadoPorDirector
+  fichasPendentes: number // Pendente — chefe ainda não avaliou
   fichasParaValidar: Ficha[]
   progresso: number
 }
 
+// ── Helpers ───────────────────────────────────────────────────
 function toArray<T>(res: unknown): T[] {
   if (Array.isArray(res)) return res
   if (res && typeof res === 'object' && Array.isArray((res as any).data))
     return (res as any).data
   return []
+}
+async function safeFetch(url: string) {
+  try {
+    const res = await fetch(url, { credentials: 'include' })
+    if (!res.ok) {
+      console.error(`[safeFetch] ${url} → ${res.status}`)
+      return null
+    }
+    return res.json()
+  } catch (e) {
+    console.error(`[safeFetch]`, e)
+    return null
+  }
 }
 function getInitials(name: string) {
   return name
@@ -97,30 +100,19 @@ function diasRestantes(dataFim: string) {
   )
 }
 
-const estadoConfig: Record<string, { label: string; class: string }> = {
+// 3 estados actuais
+const estadoConfig: Record<string, { label: string; cls: string }> = {
   Pendente: {
     label: 'Pendente',
-    class: 'bg-zinc-100 text-zinc-600 border-zinc-200',
-  },
-  AutoAvaliacao: {
-    label: 'Auto-avaliação',
-    class: 'bg-blue-50 text-blue-700 border-blue-200',
+    cls: 'bg-zinc-100 text-zinc-600 border-zinc-200',
   },
   AvaliadoPorChefe: {
     label: 'Av. p/ Chefe',
-    class: 'bg-purple-50 text-purple-700 border-purple-200',
-  },
-  EmReavaliacao: {
-    label: 'Em Reavaliação',
-    class: 'bg-amber-50 text-amber-700 border-amber-200',
-  },
-  Reavaliado: {
-    label: 'Reavaliado',
-    class: 'bg-orange-50 text-orange-700 border-orange-200',
+    cls: 'bg-purple-50 text-purple-700 border-purple-200',
   },
   ValidadoPorDirector: {
     label: 'Validado',
-    class: 'bg-emerald-50 text-emerald-700 border-emerald-200',
+    cls: 'bg-emerald-50 text-emerald-700 border-emerald-200',
   },
 }
 
@@ -128,7 +120,6 @@ function Skeleton({ className }: { className?: string }) {
   return <div className={`bg-zinc-100 rounded-xl animate-pulse ${className}`} />
 }
 
-// ── Componente ────────────────────────────────────────────────
 export default function HomeDirector() {
   const [user, setUser] = useState<AuthUser | null>(null)
   const [data, setData] = useState<DashboardData | null>(null)
@@ -138,28 +129,20 @@ export default function HomeDirector() {
     async function load() {
       setLoading(true)
       try {
-        const me: AuthUser = await fetch('/api/auth/me', {
-          credentials: 'include',
-        }).then((r) => r.json())
+        const me: AuthUser | null = await safeFetch('/api/auth/me')
         if (!me?.id) return
         setUser(me)
 
-        const [resPeriodo, resFichas, resReavaliacoes] = await Promise.all([
-          fetch('/api/periodos?activo=true&limit=1', {
-            credentials: 'include',
-          }),
-          fetch('/api/fichas?limit=500', { credentials: 'include' }),
-          fetch('/api/reavaliacoes?concluida=false&limit=100', {
-            credentials: 'include',
-          }),
+        // Sem /api/reavaliacoes — apenas periodos e fichas
+        const [dataPeriodo, dataFichas] = await Promise.all([
+          safeFetch('/api/periodos?activo=true&limit=1'),
+          safeFetch('/api/fichas?limit=500'),
         ])
 
-        const periodos: Periodo[] = toArray(await resPeriodo.json())
-        const fichas: Ficha[] = toArray(await resFichas.json())
-        const reavaliacoes: ReavaliacaoPendente[] = toArray(
-          await resReavaliacoes.json(),
-        )
+        const periodos: Periodo[] = toArray(dataPeriodo)
+        const fichas: Ficha[] = toArray(dataFichas)
         const periodo = periodos[0] ?? null
+
         const fichasPeriodo = periodo
           ? fichas.filter((f) => f.periodo.id === periodo.id)
           : fichas
@@ -167,16 +150,15 @@ export default function HomeDirector() {
         const fichasValidadas = fichasPeriodo.filter(
           (f) => f.estado === 'ValidadoPorDirector',
         ).length
+        // Director valida fichas no estado AvaliadoPorChefe
         const fichasPendentesValidacao = fichasPeriodo.filter(
-          (f) => f.estado === 'Reavaliado' || f.estado === 'AvaliadoPorChefe',
+          (f) => f.estado === 'AvaliadoPorChefe',
         ).length
-        const fichasEmReavaliacao = fichasPeriodo.filter(
-          (f) => f.estado === 'EmReavaliacao',
+        const fichasPendentes = fichasPeriodo.filter(
+          (f) => f.estado === 'Pendente',
         ).length
         const fichasParaValidar = fichasPeriodo
-          .filter(
-            (f) => f.estado === 'Reavaliado' || f.estado === 'AvaliadoPorChefe',
-          )
+          .filter((f) => f.estado === 'AvaliadoPorChefe')
           .slice(0, 5)
         const progresso =
           fichasPeriodo.length > 0
@@ -188,8 +170,7 @@ export default function HomeDirector() {
           totalFichas: fichasPeriodo.length,
           fichasPendentesValidacao,
           fichasValidadas,
-          fichasEmReavaliacao,
-          reavaliacoesPendentes: reavaliacoes,
+          fichasPendentes,
           fichasParaValidar,
           progresso,
         })
@@ -213,7 +194,6 @@ export default function HomeDirector() {
         </div>
         <Skeleton className="h-20" />
         <Skeleton className="h-48" />
-        <Skeleton className="h-40" />
       </div>
     )
 
@@ -252,21 +232,21 @@ export default function HomeDirector() {
         data.fichasPendentesValidacao > 0 ? 'bg-amber-400' : 'bg-zinc-300',
     },
     {
-      label: 'Em Reavaliação',
-      value: data.fichasEmReavaliacao,
-      icon: <RotateCcw className="h-4 w-4" />,
+      label: 'Pendentes (chefe)',
+      value: data.fichasPendentes,
+      icon: <TrendingUp className="h-4 w-4" />,
       bg:
-        data.fichasEmReavaliacao > 0
+        data.fichasPendentes > 0
           ? 'bg-blue-50 border-blue-200'
           : 'bg-zinc-50 border-zinc-200',
-      color: data.fichasEmReavaliacao > 0 ? 'text-blue-600' : 'text-zinc-400',
-      accent: data.fichasEmReavaliacao > 0 ? 'bg-blue-400' : 'bg-zinc-300',
+      color: data.fichasPendentes > 0 ? 'text-blue-600' : 'text-zinc-400',
+      accent: data.fichasPendentes > 0 ? 'bg-blue-400' : 'bg-zinc-300',
     },
   ]
 
   return (
     <div className="space-y-6">
-      {/* ── Boas-vindas ── */}
+      {/* Boas-vindas */}
       <Card className="border-zinc-200 shadow-sm overflow-hidden">
         <div className="h-[3px] bg-gradient-to-r from-indigo-400 via-blue-400 to-cyan-400" />
         <CardContent className="p-4">
@@ -298,7 +278,7 @@ export default function HomeDirector() {
         </CardContent>
       </Card>
 
-      {/* ── Período activo ── */}
+      {/* Período activo */}
       {data.periodo ? (
         <Card className="border-indigo-200 shadow-none bg-indigo-50/60">
           <CardContent className="p-4">
@@ -347,7 +327,7 @@ export default function HomeDirector() {
         </Card>
       )}
 
-      {/* ── Stats ── */}
+      {/* Stats */}
       <div className="grid grid-cols-2 gap-3">
         {stats.map((s, i) => (
           <Card
@@ -370,7 +350,7 @@ export default function HomeDirector() {
         ))}
       </div>
 
-      {/* ── Progresso ── */}
+      {/* Progresso */}
       {data.totalFichas > 0 && (
         <Card className="border-zinc-200 shadow-none">
           <CardContent className="p-4">
@@ -398,7 +378,7 @@ export default function HomeDirector() {
         </Card>
       )}
 
-      {/* ── Fichas a validar ── */}
+      {/* Fichas a validar — estado AvaliadoPorChefe */}
       {data.fichasParaValidar.length > 0 && (
         <Card className="border-amber-200 shadow-sm overflow-hidden">
           <div className="h-[3px] bg-gradient-to-r from-amber-400 to-orange-400" />
@@ -430,11 +410,12 @@ export default function HomeDirector() {
               {data.fichasParaValidar.map((f) => {
                 const est = estadoConfig[f.estado] ?? {
                   label: f.estado,
-                  class: 'bg-zinc-100 text-zinc-600 border-zinc-200',
+                  cls: 'bg-zinc-100 text-zinc-600 border-zinc-200',
                 }
                 return (
-                  <div
+                  <Link
                     key={f.id}
+                    href={`/director/validacoes`}
                     className="group flex items-center gap-3 rounded-xl bg-white border border-amber-100 hover:border-amber-200 px-4 py-3 transition-colors"
                   >
                     <Avatar className="h-8 w-8 shrink-0 ring-1 ring-zinc-200">
@@ -453,12 +434,12 @@ export default function HomeDirector() {
                       </p>
                     </div>
                     <span
-                      className={`text-[11px] font-semibold px-2.5 py-0.5 rounded-full border shrink-0 ${est.class}`}
+                      className={`text-[11px] font-semibold px-2.5 py-0.5 rounded-full border shrink-0 ${est.cls}`}
                     >
                       {est.label}
                     </span>
                     <ChevronRight className="h-3.5 w-3.5 text-zinc-300 group-hover:text-amber-400 transition-colors" />
-                  </div>
+                  </Link>
                 )
               })}
             </div>
@@ -466,87 +447,26 @@ export default function HomeDirector() {
         </Card>
       )}
 
-      {/* ── Reavaliações em curso ── */}
-      {data.reavaliacoesPendentes.length > 0 && (
-        <Card className="border-blue-200 shadow-none bg-blue-50/40">
-          <CardContent className="p-5">
-            <div className="flex items-center justify-between mb-4">
-              <div className="flex items-center gap-2.5">
-                <div className="h-8 w-8 rounded-lg bg-blue-100 flex items-center justify-center">
-                  <RotateCcw className="h-4 w-4 text-blue-600" />
-                </div>
-                <div>
-                  <p className="text-sm font-semibold text-blue-900">
-                    Reavaliações em curso
-                  </p>
-                  <p className="text-[11px] text-blue-600 mt-0.5">
-                    {data.reavaliacoesPendentes.length} pendente
-                    {data.reavaliacoesPendentes.length !== 1 ? 's' : ''}
-                  </p>
-                </div>
-              </div>
-              <Link
-                href="/director/reavaliacoes"
-                className="flex items-center gap-1 text-xs text-blue-700 hover:text-blue-900 font-medium transition-colors"
-              >
-                Ver todas <ArrowRight className="h-3.5 w-3.5" />
-              </Link>
-            </div>
-            <div className="space-y-2">
-              {data.reavaliacoesPendentes.slice(0, 4).map((r) => (
-                <div
-                  key={r.id}
-                  className="flex items-center justify-between rounded-xl bg-white border border-blue-100 px-4 py-3"
-                >
-                  <div className="min-w-0">
-                    <p className="text-sm font-medium text-zinc-900 truncate">
-                      {r.ficha.avaliado.nomeCompleto}
-                    </p>
-                    <p className="text-[11px] text-zinc-400">
-                      {r.ficha.avaliado.cargo}
-                    </p>
-                  </div>
-                  <div className="text-right shrink-0 ml-3">
-                    <p className="text-[10px] text-zinc-400 uppercase tracking-wide">
-                      Reavaliador
-                    </p>
-                    <p className="text-xs font-semibold text-blue-700">
-                      {r.reavaliador.nomeCompleto.split(' ')[0]}
-                    </p>
-                  </div>
-                </div>
-              ))}
-            </div>
-          </CardContent>
-        </Card>
-      )}
-
-      {/* ── Atalhos rápidos ── */}
+      {/* Atalhos */}
       <div className="grid grid-cols-2 gap-3">
         {[
-          {
-            label: 'Critérios',
-            href: '/director/criterios',
-            icon: <ClipboardList className="h-4 w-4 text-purple-500" />,
-            desc: 'Gerir critérios',
-          },
-          {
-            label: 'Fichas de Avaliação',
-            href: '/director/fichas',
-            icon: <FileText className="h-4 w-4 text-blue-500" />,
-            desc: 'Ver todas as fichas',
-          },
-          {
-            label: 'Reavaliações',
-            href: '/director/reavaliacoes',
-            icon: <RotateCcw className="h-4 w-4 text-amber-500" />,
-            desc: 'Indicar reavaliadores',
-          },
           {
             label: 'Validações',
             href: '/director/validacoes',
             icon: <CheckCircle2 className="h-4 w-4 text-emerald-500" />,
             desc: 'Aprovar avaliações',
+          },
+          {
+            label: 'Fichas',
+            href: '/director/fichas',
+            icon: <FileText className="h-4 w-4 text-blue-500" />,
+            desc: 'Ver todas as fichas',
+          },
+          {
+            label: 'Critérios',
+            href: '/director/criterios',
+            icon: <ClipboardList className="h-4 w-4 text-purple-500" />,
+            desc: 'Gerir critérios',
           },
         ].map((a, i) => (
           <Link

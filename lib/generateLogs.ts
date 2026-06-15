@@ -1,7 +1,6 @@
 // lib/generateLogs.ts
 // Gera logs dinamicamente a partir dos dados reais do Prisma.
-// Não requer nenhuma tabela de logs — infere os eventos a partir
-// dos registos existentes (createdAt, updatedAt, estado, etc.)
+// Schema actual: submissao singular por ficha, sem reavaliacao, sem tipo.
 
 import { prisma } from '@/lib/prisma'
 
@@ -43,7 +42,7 @@ export async function generateLogsFromData(
   const df = dateFilter(startDate, endDate)
   const logs: LogEntry[] = []
 
-  // ── Utilizadores criados ──────────────────────────────────
+  // ── Utilizadores criados / desactivados ──────────────────
   if (!entityType || entityType === 'utilizadores') {
     const utilizadores = await prisma.utilizador.findMany({
       where: { createdAt: df },
@@ -192,11 +191,8 @@ export async function generateLogsFromData(
         nome: true,
         peso: true,
         createdAt: true,
-        // Pivot M:N — lista os departamentos associados
         departamentos: {
-          select: {
-            departamento: { select: { nome: true } },
-          },
+          select: { departamento: { select: { nome: true } } },
         },
         tecnico: {
           select: {
@@ -217,8 +213,7 @@ export async function generateLogsFromData(
       } else if (c.departamentos.length === 1) {
         ambito = `para o departamento "${c.departamentos[0].departamento.nome}"`
       } else if (c.departamentos.length > 1) {
-        const nomes = c.departamentos.map((d) => d.departamento.nome).join(', ')
-        ambito = `para os departamentos "${nomes}"`
+        ambito = `para os departamentos "${c.departamentos.map((d) => d.departamento.nome).join(', ')}"`
       } else {
         ambito = 'geral'
       }
@@ -265,7 +260,7 @@ export async function generateLogsFromData(
     }
   }
 
-  // ── Fichas de avaliação ───────────────────────────────────
+  // ── Fichas de avaliação criadas ───────────────────────────
   if (!entityType || entityType === 'fichas') {
     const fichas = await prisma.fichaAvaliacao.findMany({
       where: { createdAt: df },
@@ -301,14 +296,15 @@ export async function generateLogsFromData(
     }
   }
 
-  // ── Submissões de avaliação ───────────────────────────────
+  // ── Submissões do chefe (singular por ficha) ──────────────
+  // Schema novo: SubmissaoAvaliacao sem campo "tipo",
+  // ligada à ficha via fichaId @unique
   if (!entityType || entityType === 'submissoes') {
     const submissoes = await prisma.submissaoAvaliacao.findMany({
       where: { dataSubmissao: df },
       orderBy: { dataSubmissao: 'desc' },
       select: {
         id: true,
-        tipo: true,
         pontuacaoTotal: true,
         dataSubmissao: true,
         avaliador: {
@@ -329,20 +325,14 @@ export async function generateLogsFromData(
       },
     })
 
-    const tipoLabel: Record<string, string> = {
-      AutoAvaliacao: 'Auto-avaliação',
-      AvaliacaoChefe: 'Avaliação do chefe',
-      Reavaliacao: 'Reavaliação',
-    }
-
     for (const s of submissoes) {
       logs.push({
         id: `submissao-${s.id}`,
         createdAt: s.dataSubmissao,
         categoria: 'Avaliacao',
         nivel: 'Info',
-        accao: `SUBMISSAO_${s.tipo.toUpperCase()}`,
-        descricao: `${tipoLabel[s.tipo] ?? s.tipo} submetida por "${s.avaliador.nomeCompleto}" para "${s.ficha.avaliado.nomeCompleto}" (${s.ficha.periodo.nome})${s.pontuacaoTotal != null ? ` — pontuação: ${s.pontuacaoTotal}` : ''}.`,
+        accao: 'SUBMISSAO_CHEFE',
+        descricao: `Avaliação submetida por "${s.avaliador.nomeCompleto}" para "${s.ficha.avaliado.nomeCompleto}" (${s.ficha.periodo.nome})${s.pontuacaoTotal != null ? ` — pontuação: ${s.pontuacaoTotal}` : ''}.`,
         entidadeId: s.id,
         utilizador: s.avaliador,
       })
@@ -386,48 +376,6 @@ export async function generateLogsFromData(
         descricao: `Avaliação de "${v.ficha.avaliado.nomeCompleto}" (${v.ficha.periodo.nome}) ${v.aprovado ? 'aprovada' : 'rejeitada'} pelo director "${v.director.nomeCompleto}".`,
         entidadeId: v.id,
         utilizador: v.director,
-      })
-    }
-  }
-
-  // ── Reavaliações indicadas ────────────────────────────────
-  if (!entityType || entityType === 'reavaliacao') {
-    const reavs = await prisma.reavaliacaoIndicada.findMany({
-      where: { dataIndicacao: df },
-      orderBy: { dataIndicacao: 'desc' },
-      select: {
-        id: true,
-        concluida: true,
-        dataIndicacao: true,
-        reavaliador: {
-          select: {
-            id: true,
-            nomeCompleto: true,
-            email: true,
-            role: true,
-            avatarUrl: true,
-          },
-        },
-        indicadoPor: { select: { nomeCompleto: true } },
-        ficha: {
-          select: {
-            avaliado: { select: { nomeCompleto: true } },
-            periodo: { select: { nome: true } },
-          },
-        },
-      },
-    })
-
-    for (const r of reavs) {
-      logs.push({
-        id: `reavaliacao-${r.id}`,
-        createdAt: r.dataIndicacao,
-        categoria: 'Avaliacao',
-        nivel: 'Info',
-        accao: 'REAVALIACAO_INDICADA',
-        descricao: `Reavaliação de "${r.ficha.avaliado.nomeCompleto}" (${r.ficha.periodo.nome}) indicada por "${r.indicadoPor.nomeCompleto}" ao técnico "${r.reavaliador.nomeCompleto}".`,
-        entidadeId: r.id,
-        utilizador: r.reavaliador,
       })
     }
   }

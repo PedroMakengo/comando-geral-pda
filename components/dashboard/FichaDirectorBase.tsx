@@ -12,7 +12,6 @@ import {
   XCircle,
   AlertCircle,
   Loader2,
-  RotateCcw,
   Download,
   FileText,
   FileSpreadsheet,
@@ -47,14 +46,9 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
 import { Button } from '@/components/ui/button'
-import { Separator } from '@/components/ui/separator'
 import { toast } from 'sonner'
 
 // ── Tipos ─────────────────────────────────────────────────────
-interface AuthUser {
-  id: string
-  departamento?: { id: string; nome: string } | null
-}
 interface Ficha {
   id: string
   estado: string
@@ -66,16 +60,31 @@ interface Ficha {
     cargo: string
     role: string
     avatarUrl?: string
+    numeroMecanografico?: string
     departamento?: { id: string; nome: string } | null
   }
   periodo: { id: string; nome: string; dataInicio: string; dataFim: string }
-  _count?: { submissoes: number }
+  submissao?: { pontuacaoTotal?: number | null } | null
   validacao?: { aprovado: boolean; dataValidacao: string } | null
 }
-interface FichaDetalhe extends Ficha {
-  submissoes: {
+interface FichaDetalhe {
+  id: string
+  estado: string
+  pontuacaoFinal?: number | null
+  createdAt: string
+  avaliado: {
     id: string
-    tipo: string
+    nomeCompleto: string
+    cargo: string
+    role: string
+    avatarUrl?: string
+    numeroMecanografico: string
+    departamento?: { id: string; nome: string } | null
+  }
+  periodo: { id: string; nome: string; dataInicio: string; dataFim: string }
+  // submissao singular — schema novo
+  submissao?: {
+    id: string
     comentarios?: string | null
     pontuacaoTotal?: number | null
     dataSubmissao: string
@@ -83,16 +92,9 @@ interface FichaDetalhe extends Ficha {
     respostas: {
       id: string
       pontuacao: number
+      observacao?: string | null
       criterio: { id: string; nome: string; peso: number }
     }[]
-  }[]
-  reavaliacao?: {
-    id: string
-    motivacao?: string | null
-    concluida: boolean
-    dataIndicacao: string
-    reavaliador: { id: string; nomeCompleto: string }
-    indicadoPor: { id: string; nomeCompleto: string }
   } | null
   validacao?: {
     id: string
@@ -101,11 +103,6 @@ interface FichaDetalhe extends Ficha {
     dataValidacao: string
     director: { id: string; nomeCompleto: string }
   } | null
-}
-interface Utilizador {
-  id: string
-  nomeCompleto: string
-  cargo: string
 }
 interface Periodo {
   id: string
@@ -117,6 +114,8 @@ interface Meta {
   limit: number
   totalPages: number
 }
+type FichaSortKey = 'avaliado' | 'periodo' | 'estado' | 'pontuacao' | 'data'
+type SortDir = 'asc' | 'desc'
 
 // ── Helpers ───────────────────────────────────────────────────
 function toArray<T>(res: unknown): T[] {
@@ -124,6 +123,19 @@ function toArray<T>(res: unknown): T[] {
   if (res && typeof res === 'object' && Array.isArray((res as any).data))
     return (res as any).data
   return []
+}
+async function safeFetch(url: string) {
+  try {
+    const res = await fetch(url, { credentials: 'include' })
+    if (!res.ok) {
+      console.error(`[safeFetch] ${url} → ${res.status}`)
+      return null
+    }
+    return res.json()
+  } catch (e) {
+    console.error(`[safeFetch]`, e)
+    return null
+  }
 }
 function getInitials(name: string) {
   return name
@@ -141,47 +153,28 @@ function formatDate(iso: string) {
   })
 }
 
-const estadoConfig: Record<string, { label: string; class: string }> = {
+// 3 estados actuais
+const estadoConfig: Record<string, { label: string; cls: string }> = {
   Pendente: {
     label: 'Pendente',
-    class: 'bg-zinc-100 text-zinc-600 border-zinc-200',
-  },
-  AutoAvaliacao: {
-    label: 'Auto-avaliação',
-    class: 'bg-blue-50 text-blue-700 border-blue-200',
+    cls: 'bg-zinc-100 text-zinc-600 border-zinc-200',
   },
   AvaliadoPorChefe: {
     label: 'Av. p/ Chefe',
-    class: 'bg-purple-50 text-purple-700 border-purple-200',
-  },
-  EmReavaliacao: {
-    label: 'Em Reavaliação',
-    class: 'bg-amber-50 text-amber-700 border-amber-200',
-  },
-  Reavaliado: {
-    label: 'Reavaliado',
-    class: 'bg-orange-50 text-orange-700 border-orange-200',
+    cls: 'bg-purple-50 text-purple-700 border-purple-200',
   },
   ValidadoPorDirector: {
     label: 'Validado',
-    class: 'bg-emerald-50 text-emerald-700 border-emerald-200',
+    cls: 'bg-emerald-50 text-emerald-700 border-emerald-200',
   },
 }
 const estadoOrder: Record<string, number> = {
   Pendente: 0,
-  AutoAvaliacao: 1,
-  AvaliadoPorChefe: 2,
-  EmReavaliacao: 3,
-  Reavaliado: 4,
-  ValidadoPorDirector: 5,
-}
-const tipoLabel: Record<string, string> = {
-  AutoAvaliacao: 'Auto-avaliação',
-  AvaliacaoChefe: 'Avaliação do Chefe',
-  Reavaliacao: 'Reavaliação',
+  AvaliadoPorChefe: 1,
+  ValidadoPorDirector: 2,
 }
 
-const EXPORT_COLS_FICHAS = [
+const EXPORT_COLS = [
   {
     header: 'Tecnico',
     value: (r: Ficha) => r.avaliado.nomeCompleto,
@@ -205,11 +198,6 @@ const EXPORT_COLS_FICHAS = [
       r.pontuacaoFinal != null ? r.pontuacaoFinal.toFixed(2) : '-',
     flex: 1,
   },
-  {
-    header: 'Submissoes',
-    value: (r: Ficha) => String(r._count?.submissoes ?? 0),
-    flex: 1,
-  },
   { header: 'Data', value: (r: Ficha) => formatDate(r.createdAt), flex: 1.2 },
 ]
 
@@ -230,6 +218,7 @@ function ExportBtn<T>({
   const [loadingPdf, setLoadingPdf] = useState(false)
   const [loadingXlsx, setLoadingXlsx] = useState(false)
   const isLoading = loadingPdf || loadingXlsx
+
   const handle = (formato: 'pdf' | 'excel') => async () => {
     const set = formato === 'pdf' ? setLoadingPdf : setLoadingXlsx
     set(true)
@@ -270,6 +259,7 @@ function ExportBtn<T>({
       set(false)
     }
   }
+
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
@@ -298,7 +288,7 @@ function ExportBtn<T>({
         <DropdownMenuItem
           onClick={handle('pdf')}
           disabled={loadingPdf}
-          className="gap-2.5 text-sm cursor-pointer rounded-lg"
+          className="gap-2.5 text-sm cursor-pointer"
         >
           {loadingPdf ? (
             <Loader2 className="h-4 w-4 animate-spin text-zinc-400" />
@@ -315,7 +305,7 @@ function ExportBtn<T>({
         <DropdownMenuItem
           onClick={handle('excel')}
           disabled={loadingXlsx}
-          className="gap-2.5 text-sm cursor-pointer rounded-lg"
+          className="gap-2.5 text-sm cursor-pointer"
         >
           {loadingXlsx ? (
             <Loader2 className="h-4 w-4 animate-spin text-zinc-400" />
@@ -333,9 +323,6 @@ function ExportBtn<T>({
 }
 
 // ── Sort ──────────────────────────────────────────────────────
-type FichaSortKey = 'avaliado' | 'periodo' | 'estado' | 'metrica' | 'data'
-type SortDir = 'asc' | 'desc'
-
 function SortHeader<K extends string>({
   label,
   sortKey,
@@ -367,8 +354,7 @@ function SortHeader<K extends string>({
     </th>
   )
 }
-
-function getFichaSortValue(f: Ficha, key: FichaSortKey): string | number {
+function getSortValue(f: Ficha, key: FichaSortKey): string | number {
   switch (key) {
     case 'avaliado':
       return f.avaliado.nomeCompleto
@@ -376,8 +362,8 @@ function getFichaSortValue(f: Ficha, key: FichaSortKey): string | number {
       return f.periodo.nome
     case 'estado':
       return estadoOrder[f.estado] ?? 99
-    case 'metrica':
-      return f.pontuacaoFinal ?? f._count?.submissoes ?? 0
+    case 'pontuacao':
+      return f.pontuacaoFinal ?? -1
     case 'data':
       return f.createdAt
     default:
@@ -390,8 +376,8 @@ function sortFichas(
 ): Ficha[] {
   if (!sort.key) return list
   return [...list].sort((a, b) => {
-    const aV = getFichaSortValue(a, sort.key!),
-      bV = getFichaSortValue(b, sort.key!)
+    const aV = getSortValue(a, sort.key!),
+      bV = getSortValue(b, sort.key!)
     const cmp =
       typeof aV === 'number' && typeof bV === 'number'
         ? aV - bV
@@ -425,7 +411,58 @@ function PontuacaoBar({ valor }: { valor: number }) {
   )
 }
 
-// ── FichasBase ────────────────────────────────────────────────
+// ── Download ficha PDF ────────────────────────────────────────
+function DownloadFichaBtn({
+  fichaId,
+  mecanografico,
+  periodoNome,
+}: {
+  fichaId: string
+  mecanografico: string
+  periodoNome: string
+}) {
+  const [loading, setLoading] = useState(false)
+  const handleDownload = async () => {
+    setLoading(true)
+    try {
+      const res = await fetch(`/api/fichas/${fichaId}/pdf`, {
+        credentials: 'include',
+      })
+      if (!res.ok) {
+        toast.error('Não foi possível gerar o PDF.')
+        return
+      }
+      const blob = await res.blob()
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = `ficha-${mecanografico}-${periodoNome.replace(/\s+/g, '-')}.pdf`
+      a.click()
+      URL.revokeObjectURL(url)
+    } catch {
+      toast.error('Erro ao gerar o PDF.')
+    } finally {
+      setLoading(false)
+    }
+  }
+  return (
+    <button
+      type="button"
+      onClick={handleDownload}
+      disabled={loading}
+      className="flex items-center gap-1.5 text-xs font-semibold bg-zinc-950 hover:bg-zinc-800 text-white px-3 py-1.5 rounded-lg transition-colors disabled:opacity-50 shrink-0"
+    >
+      {loading ? (
+        <Loader2 className="h-3.5 w-3.5 animate-spin" />
+      ) : (
+        <Download className="h-3.5 w-3.5" />
+      )}
+      {loading ? 'A gerar...' : 'Baixar PDF'}
+    </button>
+  )
+}
+
+// ── Componente principal ──────────────────────────────────────
 export function FichasBase({
   modo,
 }: {
@@ -445,13 +482,12 @@ export function FichasBase({
     modo === 'historico'
       ? 'ValidadoPorDirector'
       : modo === 'validacoes'
-        ? 'Reavaliado'
+        ? 'AvaliadoPorChefe'
         : '_all',
   )
   const [filtroPeriodo, setFiltroPeriodo] = useState('_all')
   const [page, setPage] = useState(1)
   const [periodos, setPeriodos] = useState<Periodo[]>([])
-  const [tecnicos, setTecnicos] = useState<Utilizador[]>([])
   const [sort, setSort] = useState<{
     key: FichaSortKey | null
     direction: SortDir
@@ -459,11 +495,6 @@ export function FichasBase({
   const [sheetOpen, setSheetOpen] = useState(false)
   const [fichaDetalhe, setFichaDetalhe] = useState<FichaDetalhe | null>(null)
   const [loadingSheet, setLoadingSheet] = useState(false)
-  const [sheetReav, setSheetReav] = useState(false)
-  const [fichaParaReav, setFichaParaReav] = useState<Ficha | null>(null)
-  const [reavaliadorId, setReavaliadorId] = useState('')
-  const [motivacaoReav, setMotivcaoReav] = useState('')
-  const [submittingReav, setSubmittingReav] = useState(false)
   const [validando, setValidando] = useState(false)
   const [comentValida, setComentValida] = useState('')
 
@@ -475,12 +506,9 @@ export function FichasBase({
       params.set('limit', '15')
       if (filtroEstado !== '_all') params.set('estado', filtroEstado)
       if (filtroPeriodo !== '_all') params.set('periodoId', filtroPeriodo)
-      const res = await fetch(`/api/fichas?${params}`, {
-        credentials: 'include',
-      })
-      const data = await res.json()
+      const data = await safeFetch(`/api/fichas?${params}`)
       setFichas(toArray<Ficha>(data))
-      if (data.meta) setMeta(data.meta)
+      if (data?.meta) setMeta(data.meta)
     } catch {
       toast.error('Não foi possível carregar as fichas.')
     } finally {
@@ -491,18 +519,11 @@ export function FichasBase({
   useEffect(() => {
     fetchFichas()
   }, [fetchFichas])
+
   useEffect(() => {
-    fetch('/api/periodos?limit=100', { credentials: 'include' })
-      .then((r) => r.json())
-      .then((d) => setPeriodos(toArray(d)))
-      .catch(() => {})
-    fetch('/api/utilizadores?limit=200&role=Tecnico', {
-      credentials: 'include',
-    })
-      .then((r) => r.json())
-      .then((d) => setTecnicos(toArray(d)))
-      .catch(() => {})
+    safeFetch('/api/periodos?limit=100').then((d) => setPeriodos(toArray(d)))
   }, [])
+
   useEffect(() => {
     const t = setTimeout(() => {
       setSearch(searchInput)
@@ -524,11 +545,8 @@ export function FichasBase({
     setLoadingSheet(true)
     setComentValida('')
     try {
-      setFichaDetalhe(
-        await fetch(`/api/fichas/${f.id}`, { credentials: 'include' }).then(
-          (r) => r.json(),
-        ),
-      )
+      const data = await safeFetch(`/api/fichas/${f.id}`)
+      setFichaDetalhe(data)
     } catch {
       toast.error('Erro ao carregar.')
     } finally {
@@ -554,50 +572,11 @@ export function FichasBase({
         toast.error(data.error ?? 'Erro ao validar.')
         return
       }
-      toast.success(
-        aprovado ? 'Avaliação aprovada com sucesso!' : 'Avaliação rejeitada.',
-      )
+      toast.success(aprovado ? 'Avaliação aprovada!' : 'Avaliação rejeitada.')
       setSheetOpen(false)
       fetchFichas()
     } finally {
       setValidando(false)
-    }
-  }
-
-  const abrirReavaliacao = (f: Ficha) => {
-    setFichaParaReav(f)
-    setReavaliadorId('')
-    setMotivcaoReav('')
-    setSheetReav(true)
-  }
-
-  const submeterReavaliacao = async () => {
-    if (!fichaParaReav || !reavaliadorId) {
-      toast.error('Seleccione um reavaliador.')
-      return
-    }
-    setSubmittingReav(true)
-    try {
-      const res = await fetch('/api/reavaliacoes', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        credentials: 'include',
-        body: JSON.stringify({
-          fichaId: fichaParaReav.id,
-          reavaliadorId,
-          motivacao: motivacaoReav.trim() || null,
-        }),
-      })
-      const data = await res.json()
-      if (!res.ok) {
-        toast.error(data.error ?? 'Erro ao indicar reavaliação.')
-        return
-      }
-      toast.success('Reavaliação indicada com sucesso!')
-      setSheetReav(false)
-      fetchFichas()
-    } finally {
-      setSubmittingReav(false)
     }
   }
 
@@ -610,25 +589,19 @@ export function FichasBase({
     sort,
   )
 
-  const podeValidar = (f: FichaDetalhe) => {
-    const isChefe = f.avaliado.role === 'ChefeDepartamento'
-    if (isChefe)
-      return ['AutoAvaliacao', 'AvaliadoPorChefe', 'Reavaliado'].includes(
-        f.estado,
-      )
-    return f.estado === 'AvaliadoPorChefe' || f.estado === 'Reavaliado'
-  }
-  const podeReavaliar = (f: Ficha) =>
-    f.avaliado.role !== 'ChefeDepartamento' && f.estado === 'AvaliadoPorChefe'
+  // Director valida fichas no estado AvaliadoPorChefe
+  const podeValidar = (f: FichaDetalhe) =>
+    f.estado === 'AvaliadoPorChefe' && !f.validacao
+  // Download disponível quando processo completo
+  const podeDownload = (f: FichaDetalhe) => f.estado === 'ValidadoPorDirector'
 
-  // Mini stats
   const validadas = fichas.filter(
     (f) => f.estado === 'ValidadoPorDirector',
   ).length
-  const pendentes = fichas.filter(
-    (f) => f.estado === 'AvaliadoPorChefe' || f.estado === 'Reavaliado',
+  const paraValidar = fichas.filter(
+    (f) => f.estado === 'AvaliadoPorChefe',
   ).length
-  const emReav = fichas.filter((f) => f.estado === 'EmReavaliacao').length
+  const pendentes = fichas.filter((f) => f.estado === 'Pendente').length
 
   const titulos = {
     fichas: {
@@ -644,20 +617,10 @@ export function FichasBase({
       sub: `${meta.total} ficha${meta.total !== 1 ? 's' : ''} a aguardar validação`,
     },
   }
-  const exportTitulo = {
-    fichas: 'Fichas de Avaliacao',
-    historico: 'Historico de Avaliacoes',
-    validacoes: 'Validacoes Pendentes',
-  }
-  const exportFilename = {
-    fichas: 'fichas',
-    historico: 'historico',
-    validacoes: 'validacoes',
-  }
 
   return (
     <div className="space-y-6">
-      {/* ── Cabeçalho ── */}
+      {/* Cabeçalho */}
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
         <div>
           <h1 className="text-2xl font-bold text-zinc-900 tracking-tight">
@@ -667,53 +630,55 @@ export function FichasBase({
         </div>
         <ExportBtn
           data={fichasFiltradas}
-          cols={EXPORT_COLS_FICHAS}
-          titulo={exportTitulo[modo]}
-          filename={exportFilename[modo]}
+          cols={EXPORT_COLS}
+          titulo={
+            {
+              fichas: 'Fichas de Avaliacao',
+              historico: 'Historico de Avaliacoes',
+              validacoes: 'Validacoes Pendentes',
+            }[modo]
+          }
+          filename={
+            {
+              fichas: 'fichas',
+              historico: 'historico',
+              validacoes: 'validacoes',
+            }[modo]
+          }
           disabled={loading}
         />
       </div>
 
-      {/* ── Mini stats ── */}
+      {/* Mini stats */}
       {modo !== 'historico' && (
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+        <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
           {[
             {
               label: 'Total',
               value: meta.total,
-              icon: <ClipboardList className="h-4 w-4" />,
-              bg: 'bg-zinc-50 border-zinc-200',
+              cls: 'bg-zinc-50 border-zinc-200',
               color: 'text-zinc-500',
+              icon: <ClipboardList className="h-4 w-4" />,
             },
             {
               label: 'Validadas',
               value: validadas,
-              icon: <CheckCircle2 className="h-4 w-4" />,
-              bg: 'bg-emerald-50 border-emerald-200',
+              cls: 'bg-emerald-50 border-emerald-200',
               color: 'text-emerald-600',
+              icon: <CheckCircle2 className="h-4 w-4" />,
             },
             {
               label: 'A validar',
-              value: pendentes,
-              icon: <AlertCircle className="h-4 w-4" />,
-              bg:
-                pendentes > 0
+              value: paraValidar,
+              cls:
+                paraValidar > 0
                   ? 'bg-amber-50 border-amber-200'
                   : 'bg-zinc-50 border-zinc-200',
-              color: pendentes > 0 ? 'text-amber-600' : 'text-zinc-400',
-            },
-            {
-              label: 'Em Reavaliação',
-              value: emReav,
-              icon: <RotateCcw className="h-4 w-4" />,
-              bg:
-                emReav > 0
-                  ? 'bg-blue-50 border-blue-200'
-                  : 'bg-zinc-50 border-zinc-200',
-              color: emReav > 0 ? 'text-blue-600' : 'text-zinc-400',
+              color: paraValidar > 0 ? 'text-amber-600' : 'text-zinc-400',
+              icon: <AlertCircle className="h-4 w-4" />,
             },
           ].map((s, i) => (
-            <Card key={i} className={`border shadow-none ${s.bg}`}>
+            <Card key={i} className={`border shadow-none ${s.cls}`}>
               <CardContent className="p-4 flex items-center justify-between">
                 <div>
                   <p className="text-[11px] font-semibold uppercase tracking-widest text-zinc-400">
@@ -730,7 +695,7 @@ export function FichasBase({
         </div>
       )}
 
-      {/* ── Filtros ── */}
+      {/* Filtros */}
       <Card className="border-zinc-200 shadow-none">
         <CardContent className="p-4">
           <div className="flex flex-wrap gap-3">
@@ -790,7 +755,7 @@ export function FichasBase({
         </CardContent>
       </Card>
 
-      {/* ── Tabela ── */}
+      {/* Tabela */}
       <Card className="border-zinc-200 shadow-sm overflow-hidden">
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
@@ -815,8 +780,8 @@ export function FichasBase({
                   onSort={handleSort}
                 />
                 <SortHeader
-                  label={modo === 'historico' ? 'Pontuação' : 'Submissões'}
-                  sortKey="metrica"
+                  label="Pontuação"
+                  sortKey="pontuacao"
                   sortState={sort}
                   onSort={handleSort}
                 />
@@ -826,7 +791,7 @@ export function FichasBase({
                   sortState={sort}
                   onSort={handleSort}
                 />
-                <th className="px-4 py-3 w-16" />
+                <th className="px-4 py-3 w-12" />
               </tr>
             </thead>
             <tbody className="divide-y divide-zinc-100/80">
@@ -859,12 +824,13 @@ export function FichasBase({
                 fichasFiltradas.map((f) => {
                   const est = estadoConfig[f.estado] ?? {
                     label: f.estado,
-                    class: 'bg-zinc-100 text-zinc-600 border-zinc-200',
+                    cls: 'bg-zinc-100 text-zinc-600 border-zinc-200',
                   }
                   return (
                     <tr
                       key={f.id}
-                      className="group hover:bg-zinc-50/60 transition-colors duration-100"
+                      onClick={() => abrirFicha(f)}
+                      className="group hover:bg-zinc-50/60 transition-colors cursor-pointer"
                     >
                       <td className="px-4 py-3">
                         <div className="flex items-center gap-3">
@@ -891,43 +857,23 @@ export function FichasBase({
                       </td>
                       <td className="px-4 py-3">
                         <span
-                          className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-[11px] font-semibold border ${est.class}`}
+                          className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-[11px] font-semibold border ${est.cls}`}
                         >
                           {est.label}
                         </span>
                       </td>
                       <td className="px-4 py-3 min-w-[110px]">
-                        {modo === 'historico' && f.pontuacaoFinal != null ? (
+                        {f.pontuacaoFinal != null ? (
                           <PontuacaoBar valor={f.pontuacaoFinal} />
                         ) : (
-                          <span
-                            className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[11px] font-semibold ${(f._count?.submissoes ?? 0) > 0 ? 'bg-blue-50 text-blue-700 border border-blue-200' : 'bg-zinc-50 text-zinc-400 border border-zinc-100'}`}
-                          >
-                            {f._count?.submissoes ?? 0}
-                          </span>
+                          <span className="text-zinc-300 text-xs">—</span>
                         )}
                       </td>
                       <td className="px-4 py-3 text-[12px] text-zinc-400">
                         {formatDate(f.createdAt)}
                       </td>
                       <td className="px-4 py-3">
-                        <div className="flex items-center gap-1 justify-end">
-                          {modo !== 'historico' && podeReavaliar(f) && (
-                            <button
-                              onClick={() => abrirReavaliacao(f)}
-                              title="Indicar reavaliação"
-                              className="h-7 w-7 rounded-lg flex items-center justify-center text-zinc-300 hover:text-amber-500 hover:bg-amber-50 transition-colors opacity-0 group-hover:opacity-100"
-                            >
-                              <RotateCcw className="h-3.5 w-3.5" />
-                            </button>
-                          )}
-                          <button
-                            onClick={() => abrirFicha(f)}
-                            className="h-7 w-7 rounded-lg flex items-center justify-center text-zinc-300 hover:text-zinc-600 hover:bg-zinc-100 transition-colors opacity-0 group-hover:opacity-100"
-                          >
-                            <Eye className="h-4 w-4" />
-                          </button>
-                        </div>
+                        <Eye className="h-4 w-4 text-zinc-300 group-hover:text-zinc-500 transition-colors" />
                       </td>
                     </tr>
                   )
@@ -968,25 +914,36 @@ export function FichasBase({
         )}
       </Card>
 
-      {/* ── Sheet detalhe ── */}
+      {/* Sheet detalhe */}
       <Sheet open={sheetOpen} onOpenChange={setSheetOpen}>
         <SheetContent className="w-full sm:max-w-lg flex flex-col gap-0 p-0 overflow-hidden">
           <SheetHeader className="px-6 py-5 border-b border-zinc-100 shrink-0">
-            <div className="flex items-center gap-3">
-              <div className="h-9 w-9 rounded-xl bg-zinc-100 flex items-center justify-center shrink-0">
-                <ClipboardList className="h-4 w-4 text-zinc-500" />
+            <div className="flex items-center justify-between gap-3">
+              <div className="flex items-center gap-3 min-w-0">
+                <div className="h-9 w-9 rounded-xl bg-zinc-100 flex items-center justify-center shrink-0">
+                  <ClipboardList className="h-4 w-4 text-zinc-500" />
+                </div>
+                <div className="min-w-0">
+                  <SheetTitle className="text-base font-semibold text-zinc-900">
+                    Ficha de Avaliação
+                  </SheetTitle>
+                  <SheetDescription className="text-[12px] text-zinc-500 mt-0.5 truncate">
+                    {fichaDetalhe?.avaliado.nomeCompleto} ·{' '}
+                    {fichaDetalhe?.periodo.nome}
+                  </SheetDescription>
+                </div>
               </div>
-              <div>
-                <SheetTitle className="text-base font-semibold text-zinc-900">
-                  Ficha de Avaliação
-                </SheetTitle>
-                <SheetDescription className="text-[12px] text-zinc-500 mt-0.5">
-                  {fichaDetalhe?.avaliado.nomeCompleto} ·{' '}
-                  {fichaDetalhe?.periodo.nome}
-                </SheetDescription>
-              </div>
+              {/* Botão download — só quando ValidadoPorDirector */}
+              {fichaDetalhe && podeDownload(fichaDetalhe) && (
+                <DownloadFichaBtn
+                  fichaId={fichaDetalhe.id}
+                  mecanografico={fichaDetalhe.avaliado.numeroMecanografico}
+                  periodoNome={fichaDetalhe.periodo.nome}
+                />
+              )}
             </div>
           </SheetHeader>
+
           <div className="flex-1 overflow-y-auto px-6 py-5 space-y-5">
             {loadingSheet ? (
               Array.from({ length: 4 }).map((_, i) => (
@@ -1018,7 +975,7 @@ export function FichasBase({
                     const e = estadoConfig[fichaDetalhe.estado]
                     return e ? (
                       <span
-                        className={`text-[11px] font-semibold px-2.5 py-0.5 rounded-full border shrink-0 ${e.class}`}
+                        className={`text-[11px] font-semibold px-2.5 py-0.5 rounded-full border shrink-0 ${e.cls}`}
                       >
                         {e.label}
                       </span>
@@ -1039,128 +996,87 @@ export function FichasBase({
                         Pontuação Final
                       </p>
                       <p className="text-xs text-emerald-600 mt-0.5">
-                        Validado pelo Director
+                        Média ponderada dos critérios
                       </p>
                     </div>
                   </div>
                 )}
 
-                {/* Submissões */}
+                {/* Avaliação do chefe — submissao singular */}
                 <div>
                   <p className="text-[10px] font-bold text-zinc-400 uppercase tracking-[0.12em] mb-3">
-                    Submissões ({fichaDetalhe.submissoes.length})
+                    Avaliação do chefe
                   </p>
-                  <div className="space-y-3">
-                    {fichaDetalhe.submissoes.map((s) => (
-                      <div
-                        key={s.id}
-                        className="rounded-xl border border-zinc-200 p-4 bg-white"
-                      >
-                        <div className="flex items-center justify-between mb-2">
-                          <span className="text-xs font-semibold text-zinc-700 bg-zinc-100 px-2 py-0.5 rounded-md">
-                            {tipoLabel[s.tipo] ?? s.tipo}
-                          </span>
-                          <div className="flex items-center gap-2">
-                            {s.pontuacaoTotal != null && (
-                              <span className="text-sm font-bold text-zinc-900">
-                                {s.pontuacaoTotal.toFixed(1)}
-                                <span className="text-xs font-normal text-zinc-400">
-                                  {' '}
-                                  /5
-                                </span>
-                              </span>
-                            )}
-                            <span className="text-[11px] text-zinc-400">
-                              {formatDate(s.dataSubmissao)}
-                            </span>
-                          </div>
-                        </div>
-                        <p className="text-xs text-zinc-500 mb-2">
+                  {!fichaDetalhe.submissao ? (
+                    <p className="text-sm text-zinc-400">
+                      Sem avaliação submetida ainda.
+                    </p>
+                  ) : (
+                    <div className="rounded-xl border border-zinc-200 p-4 bg-white space-y-3">
+                      <div className="flex items-center justify-between">
+                        <p className="text-xs text-zinc-500">
                           Por:{' '}
                           <span className="font-medium text-zinc-700">
-                            {s.avaliador.nomeCompleto}
+                            {fichaDetalhe.submissao.avaliador.nomeCompleto}
                           </span>
                         </p>
-                        {s.comentarios && (
-                          <p className="text-xs text-zinc-600 italic border-l-2 border-zinc-200 pl-2.5 mb-3">
-                            "{s.comentarios}"
-                          </p>
-                        )}
-                        {s.respostas.length > 0 && (
-                          <div className="space-y-1.5 pt-1">
-                            {s.respostas.map((r) => (
-                              <div
-                                key={r.id}
-                                className="flex items-center justify-between text-xs"
-                              >
-                                <span className="text-zinc-500 truncate max-w-[180px]">
-                                  {r.criterio.nome}
-                                </span>
-                                <div className="flex items-center gap-2 shrink-0">
-                                  <div className="flex gap-0.5">
-                                    {Array.from({ length: 5 }).map((_, i) => (
-                                      <div
-                                        key={i}
-                                        className={`h-1.5 w-4 rounded-full ${i < r.pontuacao ? 'bg-blue-500' : 'bg-zinc-200'}`}
-                                      />
-                                    ))}
-                                  </div>
-                                  <span className="text-zinc-600 font-semibold w-4 text-right">
-                                    {r.pontuacao}
-                                  </span>
-                                </div>
-                              </div>
-                            ))}
-                          </div>
-                        )}
+                        <div className="flex items-center gap-2">
+                          {fichaDetalhe.submissao.pontuacaoTotal != null && (
+                            <span className="text-sm font-bold text-zinc-900">
+                              {fichaDetalhe.submissao.pontuacaoTotal.toFixed(1)}
+                              <span className="text-xs font-normal text-zinc-400">
+                                {' '}
+                                /5
+                              </span>
+                            </span>
+                          )}
+                          <span className="text-[11px] text-zinc-400">
+                            {formatDate(fichaDetalhe.submissao.dataSubmissao)}
+                          </span>
+                        </div>
                       </div>
-                    ))}
-                  </div>
-                </div>
-
-                {/* Reavaliação */}
-                {fichaDetalhe.reavaliacao && (
-                  <div className="rounded-xl border border-amber-200 bg-amber-50 p-4">
-                    <div className="flex items-center justify-between mb-1.5">
-                      <p className="text-[10px] font-bold text-amber-600 uppercase tracking-[0.12em]">
-                        Reavaliação
-                      </p>
-                      <span
-                        className={`text-[11px] font-semibold px-2 py-0.5 rounded-full ${fichaDetalhe.reavaliacao.concluida ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-700'}`}
-                      >
-                        {fichaDetalhe.reavaliacao.concluida
-                          ? 'Concluída'
-                          : 'Pendente'}
-                      </span>
-                    </div>
-                    <p className="text-sm font-semibold text-amber-800">
-                      Reavaliador:{' '}
-                      {fichaDetalhe.reavaliacao.reavaliador.nomeCompleto}
-                    </p>
-                    {fichaDetalhe.reavaliacao.motivacao && (
-                      <p className="text-xs text-amber-700 mt-1 italic">
-                        "{fichaDetalhe.reavaliacao.motivacao}"
-                      </p>
-                    )}
-                  </div>
-                )}
-
-                {/* Validar */}
-                {podeValidar(fichaDetalhe) && !fichaDetalhe.validacao && (
-                  <div className="rounded-xl border border-zinc-200 bg-zinc-50 p-4 space-y-3">
-                    <p className="text-[10px] font-bold text-zinc-500 uppercase tracking-[0.12em]">
-                      {fichaDetalhe.avaliado.role === 'ChefeDepartamento' &&
-                      fichaDetalhe.estado === 'AutoAvaliacao'
-                        ? 'Validar auto-avaliação do Chefe'
-                        : 'Validar avaliação'}
-                    </p>
-                    {fichaDetalhe.avaliado.role === 'ChefeDepartamento' &&
-                      fichaDetalhe.estado === 'AutoAvaliacao' && (
-                        <p className="text-xs text-zinc-500 bg-blue-50 border border-blue-100 rounded-lg px-3 py-2">
-                          O Director valida directamente a auto-avaliação dos
-                          Chefes de Departamento.
+                      {fichaDetalhe.submissao.comentarios && (
+                        <p className="text-xs text-zinc-600 italic border-l-2 border-zinc-200 pl-2.5">
+                          "{fichaDetalhe.submissao.comentarios}"
                         </p>
                       )}
+                      {(fichaDetalhe.submissao.respostas ?? []).length > 0 && (
+                        <div className="space-y-1.5 pt-1">
+                          {fichaDetalhe.submissao.respostas.map((r) => (
+                            <div
+                              key={r.id}
+                              className="flex items-center justify-between text-xs"
+                            >
+                              <span className="text-zinc-500 truncate max-w-[180px]">
+                                {r.criterio.nome}
+                              </span>
+                              <div className="flex items-center gap-2 shrink-0">
+                                <div className="flex gap-0.5">
+                                  {Array.from({ length: 5 }).map((_, i) => (
+                                    <div
+                                      key={i}
+                                      className={`h-1.5 w-4 rounded-full ${i < r.pontuacao ? 'bg-blue-500' : 'bg-zinc-200'}`}
+                                    />
+                                  ))}
+                                </div>
+                                <span className="text-zinc-600 font-semibold w-4 text-right">
+                                  {r.pontuacao}
+                                </span>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+
+                {/* Botões de validação — só quando AvaliadoPorChefe e sem validação */}
+                {podeValidar(fichaDetalhe) && (
+                  <div className="rounded-xl border border-zinc-200 bg-zinc-50 p-4 space-y-3">
+                    <p className="text-[10px] font-bold text-zinc-500 uppercase tracking-[0.12em]">
+                      Validar avaliação
+                    </p>
                     <div className="space-y-1.5">
                       <Label className="text-sm font-medium text-zinc-700">
                         Comentários{' '}
@@ -1245,86 +1161,6 @@ export function FichasBase({
                 )}
               </>
             ) : null}
-          </div>
-        </SheetContent>
-      </Sheet>
-
-      {/* ── Sheet reavaliação ── */}
-      <Sheet open={sheetReav} onOpenChange={setSheetReav}>
-        <SheetContent className="w-full sm:max-w-md flex flex-col gap-0 p-0 overflow-hidden">
-          <SheetHeader className="px-6 py-5 border-b border-zinc-100 shrink-0">
-            <div className="flex items-center gap-3">
-              <div className="h-9 w-9 rounded-xl bg-amber-50 flex items-center justify-center shrink-0">
-                <RotateCcw className="h-4 w-4 text-amber-600" />
-              </div>
-              <div>
-                <SheetTitle className="text-base font-semibold text-zinc-900">
-                  Indicar Reavaliação
-                </SheetTitle>
-                <SheetDescription className="text-[12px] text-zinc-500 mt-0.5">
-                  {fichaParaReav?.avaliado.nomeCompleto} ·{' '}
-                  {fichaParaReav?.periodo.nome}
-                </SheetDescription>
-              </div>
-            </div>
-          </SheetHeader>
-          <div className="flex-1 overflow-y-auto px-6 py-5 space-y-4">
-            <div className="space-y-1.5">
-              <Label className="text-sm font-medium text-zinc-700">
-                Técnico reavaliador
-              </Label>
-              <Select value={reavaliadorId} onValueChange={setReavaliadorId}>
-                <SelectTrigger className="h-9 rounded-lg border-zinc-200 text-sm w-full">
-                  <SelectValue placeholder="Seleccione o técnico reavaliador" />
-                </SelectTrigger>
-                <SelectContent>
-                  {tecnicos
-                    .filter((t) => t.id !== fichaParaReav?.avaliado.id)
-                    .map((t) => (
-                      <SelectItem key={t.id} value={t.id}>
-                        {t.nomeCompleto} · {t.cargo}
-                      </SelectItem>
-                    ))}
-                </SelectContent>
-              </Select>
-            </div>
-            <Separator />
-            <div className="space-y-1.5">
-              <Label className="text-sm font-medium text-zinc-700">
-                Motivação{' '}
-                <span className="text-zinc-400 font-normal">(opcional)</span>
-              </Label>
-              <Textarea
-                value={motivacaoReav}
-                onChange={(e) => setMotivcaoReav(e.target.value)}
-                placeholder="Motivo da reavaliação..."
-                className="rounded-lg border-zinc-200 text-sm resize-none"
-                rows={3}
-              />
-            </div>
-          </div>
-          <div className="px-6 py-4 border-t border-zinc-100 shrink-0 flex gap-2.5 bg-white">
-            <Button
-              type="button"
-              variant="outline"
-              className="flex-1 h-9 rounded-lg border-zinc-200 text-sm"
-              onClick={() => setSheetReav(false)}
-            >
-              Cancelar
-            </Button>
-            <Button
-              onClick={submeterReavaliacao}
-              disabled={submittingReav || !reavaliadorId}
-              className="flex-1 h-9 rounded-lg bg-amber-500 hover:bg-amber-600 text-white text-sm font-medium shadow-sm"
-            >
-              {submittingReav ? (
-                <Loader2 className="h-4 w-4 animate-spin" />
-              ) : (
-                <>
-                  <RotateCcw className="h-3.5 w-3.5 mr-1.5" /> Indicar
-                </>
-              )}
-            </Button>
           </div>
         </SheetContent>
       </Sheet>

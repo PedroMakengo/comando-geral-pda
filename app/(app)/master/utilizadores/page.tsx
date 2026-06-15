@@ -19,12 +19,18 @@ import {
   Shield,
   Building2,
   Filter,
+  Upload,
+  FileSpreadsheet,
+  CheckCircle2,
+  XCircle,
+  AlertTriangle,
+  Download,
+  Loader2,
 } from 'lucide-react'
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
-import { Badge } from '@/components/ui/badge'
 import { Card, CardContent } from '@/components/ui/card'
 import {
   Select,
@@ -48,6 +54,7 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
 import { Separator } from '@/components/ui/separator'
+import { Progress } from '@/components/ui/progress'
 import { toast } from 'sonner'
 import { ExportMenu } from '../../../../components/export-menu'
 
@@ -66,7 +73,6 @@ interface Departamento {
   nome: string
   direcaoId: string
 }
-
 interface Utilizador {
   id: string
   nomeCompleto: string
@@ -87,7 +93,6 @@ interface Meta {
   limit: number
   totalPages: number
 }
-
 type SortKey =
   | 'nomeCompleto'
   | 'numeroMecanografico'
@@ -95,10 +100,16 @@ type SortKey =
   | 'role'
   | 'departamento'
   | 'estado'
-type SortDirection = 'asc' | 'desc'
 interface SortState {
   key: SortKey | null
-  direction: SortDirection
+  direction: 'asc' | 'desc'
+}
+interface ImportResult {
+  total: number
+  criados: number
+  actualizados: number
+  ignorados: number
+  erros: { linha: number; motivo: string }[]
 }
 
 // ── Helpers ───────────────────────────────────────────────────
@@ -158,7 +169,6 @@ const schema = z.object({
 })
 type FormValues = z.infer<typeof schema>
 
-// ── Configurações de role ─────────────────────────────────────
 const roleConfig: Record<
   string,
   { label: string; badge: string; dot: string }
@@ -185,7 +195,6 @@ const roleConfig: Record<
   },
 }
 
-// ── SortHeader ────────────────────────────────────────────────
 function SortHeader({
   label,
   sortKey,
@@ -218,6 +227,387 @@ function SortHeader({
   )
 }
 
+// ── Sheet de Importação ───────────────────────────────────────
+function ImportSheet({
+  open,
+  onOpenChange,
+  onSuccess,
+}: {
+  open: boolean
+  onOpenChange: (v: boolean) => void
+  onSuccess: () => void
+}) {
+  const [file, setFile] = useState<File | null>(null)
+  const [uploading, setUploading] = useState(false)
+  const [result, setResult] = useState<ImportResult | null>(null)
+  const [dragOver, setDragOver] = useState(false)
+
+  const reset = () => {
+    setFile(null)
+    setResult(null)
+  }
+
+  const handleFile = (f: File) => {
+    const ext = f.name.split('.').pop()?.toLowerCase()
+    if (!['xlsx', 'xls', 'csv'].includes(ext ?? '')) {
+      toast.error('Formato inválido. Use .xlsx, .xls ou .csv')
+      return
+    }
+    setFile(f)
+    setResult(null)
+  }
+
+  const handleImport = async () => {
+    if (!file) return
+    setUploading(true)
+    try {
+      const fd = new FormData()
+      fd.append('file', file)
+      const res = await fetch('/api/utilizadores/import', {
+        method: 'POST',
+        credentials: 'include',
+        body: fd,
+      })
+      const data = await res.json()
+      if (!res.ok) {
+        toast.error(data.error ?? 'Erro na importação.')
+        return
+      }
+      setResult(data)
+      if (data.criados > 0 || data.actualizados > 0) {
+        onSuccess()
+        toast.success(
+          `Importação concluída — ${data.criados} criados, ${data.actualizados} actualizados`,
+        )
+      }
+    } catch {
+      toast.error('Erro ao enviar o ficheiro.')
+    } finally {
+      setUploading(false)
+    }
+  }
+
+  // Download do template
+  const downloadTemplate = () => {
+    const headers = [
+      'Nº Funcionário',
+      'Nome',
+      'Nome Abreviado',
+      'Email',
+      'Cargo',
+      'Data Nascimento',
+      'Género',
+      'Nacionalidade',
+      'Naturalidade',
+      'Telefone',
+      'Telemóvel',
+      'Extensão',
+      'Morada',
+      'Localidade',
+      'Código Postal',
+      'País',
+      'Província',
+      'Município',
+      'Comuna',
+    ]
+    const exemplo = [
+      'MEC-0001',
+      'João Pedro Silva',
+      'João Silva',
+      'joao.silva@adapec.ao',
+      'Técnico de Sistemas',
+      '15/06/1990',
+      'Masculino',
+      'Angolana',
+      'Luanda',
+      '923000001',
+      '912000001',
+      '101',
+      'Rua 1 de Agosto, Nº 12',
+      'Luanda',
+      '1000-000',
+      'Angola',
+      'Luanda',
+      'Luanda',
+      'Ingombota',
+    ]
+    // Criar CSV simples
+    const csv = [headers.join(';'), exemplo.join(';')].join('\n')
+    const blob = new Blob(['\uFEFF' + csv], { type: 'text/csv;charset=utf-8' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = 'template_importacao_funcionarios.csv'
+    a.click()
+    URL.revokeObjectURL(url)
+  }
+
+  const successRate = result
+    ? Math.round(((result.criados + result.actualizados) / result.total) * 100)
+    : 0
+
+  return (
+    <Sheet
+      open={open}
+      onOpenChange={(v) => {
+        if (!v) reset()
+        onOpenChange(v)
+      }}
+    >
+      <SheetContent className="w-full sm:max-w-md flex flex-col gap-0 p-0 overflow-hidden">
+        <SheetHeader className="px-6 py-5 border-b border-zinc-100 shrink-0">
+          <div className="flex items-center gap-3">
+            <div className="h-9 w-9 rounded-xl bg-blue-50 flex items-center justify-center shrink-0">
+              <FileSpreadsheet className="h-4 w-4 text-blue-600" />
+            </div>
+            <div>
+              <SheetTitle className="text-base font-semibold text-zinc-900">
+                Importar do Primavera
+              </SheetTitle>
+              <SheetDescription className="text-[12px] text-zinc-500 mt-0.5">
+                Carregue um ficheiro Excel (.xlsx) ou CSV exportado do Primavera
+              </SheetDescription>
+            </div>
+          </div>
+        </SheetHeader>
+
+        <div className="flex-1 overflow-y-auto px-6 py-5 space-y-5">
+          {/* Download template */}
+          <button
+            type="button"
+            onClick={downloadTemplate}
+            className="w-full flex items-center gap-3 rounded-lg border border-dashed border-zinc-300 bg-zinc-50 hover:bg-zinc-100 px-4 py-3 transition-colors text-left"
+          >
+            <Download className="h-4 w-4 text-zinc-400 shrink-0" />
+            <div>
+              <p className="text-sm font-medium text-zinc-700">
+                Baixar template CSV
+              </p>
+              <p className="text-xs text-zinc-400 mt-0.5">
+                Estrutura compatível com o Primavera
+              </p>
+            </div>
+          </button>
+
+          {/* Drop zone */}
+          <div
+            onDragOver={(e) => {
+              e.preventDefault()
+              setDragOver(true)
+            }}
+            onDragLeave={() => setDragOver(false)}
+            onDrop={(e) => {
+              e.preventDefault()
+              setDragOver(false)
+              const f = e.dataTransfer.files[0]
+              if (f) handleFile(f)
+            }}
+            className={`relative rounded-xl border-2 border-dashed transition-colors ${dragOver ? 'border-blue-400 bg-blue-50/60' : file ? 'border-emerald-300 bg-emerald-50/40' : 'border-zinc-200 bg-zinc-50 hover:border-zinc-300 hover:bg-zinc-100'} p-8 text-center cursor-pointer`}
+            onClick={() =>
+              document.getElementById('import-file-input')?.click()
+            }
+          >
+            <input
+              id="import-file-input"
+              type="file"
+              accept=".xlsx,.xls,.csv"
+              className="hidden"
+              onChange={(e) => {
+                const f = e.target.files?.[0]
+                if (f) handleFile(f)
+              }}
+            />
+            {file ? (
+              <div className="space-y-2">
+                <FileSpreadsheet className="h-8 w-8 text-emerald-500 mx-auto" />
+                <p className="text-sm font-semibold text-zinc-800">
+                  {file.name}
+                </p>
+                <p className="text-xs text-zinc-400">
+                  {(file.size / 1024).toFixed(1)} KB · Clique para trocar
+                </p>
+              </div>
+            ) : (
+              <div className="space-y-2">
+                <Upload className="h-8 w-8 text-zinc-300 mx-auto" />
+                <p className="text-sm font-medium text-zinc-600">
+                  Arraste o ficheiro aqui
+                </p>
+                <p className="text-xs text-zinc-400">
+                  ou clique para seleccionar · .xlsx, .xls, .csv
+                </p>
+              </div>
+            )}
+          </div>
+
+          {/* Mapeamento de colunas esperadas */}
+          {!result && (
+            <div className="rounded-lg bg-blue-50 border border-blue-100 p-4">
+              <p className="text-xs font-semibold text-blue-800 mb-2">
+                Colunas reconhecidas do Primavera
+              </p>
+              <div className="grid grid-cols-2 gap-x-4 gap-y-1">
+                {[
+                  'Nº Funcionário',
+                  'Nome',
+                  'Nome Abreviado',
+                  'Email',
+                  'Cargo',
+                  'Data Nascimento',
+                  'Género',
+                  'Nacionalidade',
+                  'Telefone',
+                  'Telemóvel',
+                  'Morada',
+                  'Província',
+                ].map((col) => (
+                  <p
+                    key={col}
+                    className="text-[11px] text-blue-700 flex items-center gap-1"
+                  >
+                    <span className="h-1 w-1 rounded-full bg-blue-400 shrink-0" />{' '}
+                    {col}
+                  </p>
+                ))}
+              </div>
+              <p className="text-[11px] text-blue-600 mt-2">
+                Funcionários existentes (mesmo nº mecanográfico) serão{' '}
+                <strong>actualizados</strong>, novos serão{' '}
+                <strong>criados</strong> com a senha padrão{' '}
+                <code className="bg-blue-100 px-1 rounded">Adapec@2025</code>.
+              </p>
+            </div>
+          )}
+
+          {/* Resultado */}
+          {result && (
+            <div className="space-y-4">
+              {/* Barra de progresso */}
+              <div>
+                <div className="flex items-center justify-between mb-1.5">
+                  <p className="text-sm font-semibold text-zinc-800">
+                    Resultado da importação
+                  </p>
+                  <span
+                    className={`text-xs font-bold ${successRate === 100 ? 'text-emerald-600' : successRate > 70 ? 'text-blue-600' : 'text-amber-600'}`}
+                  >
+                    {successRate}%
+                  </span>
+                </div>
+                <Progress value={successRate} className="h-2" />
+              </div>
+
+              {/* Cards de resultado */}
+              <div className="grid grid-cols-2 gap-2">
+                {[
+                  {
+                    label: 'Total linhas',
+                    value: result.total,
+                    cls: 'bg-zinc-50 border-zinc-200',
+                    icon: <FileSpreadsheet className="h-4 w-4 text-zinc-400" />,
+                  },
+                  {
+                    label: 'Criados',
+                    value: result.criados,
+                    cls: 'bg-emerald-50 border-emerald-200',
+                    icon: <CheckCircle2 className="h-4 w-4 text-emerald-600" />,
+                  },
+                  {
+                    label: 'Actualizados',
+                    value: result.actualizados,
+                    cls: 'bg-blue-50 border-blue-200',
+                    icon: <CheckCircle2 className="h-4 w-4 text-blue-600" />,
+                  },
+                  {
+                    label: 'Ignorados',
+                    value: result.ignorados,
+                    cls:
+                      result.ignorados > 0
+                        ? 'bg-amber-50 border-amber-200'
+                        : 'bg-zinc-50 border-zinc-200',
+                    icon: <AlertTriangle className="h-4 w-4 text-amber-500" />,
+                  },
+                ].map((s, i) => (
+                  <div
+                    key={i}
+                    className={`rounded-lg border p-3 flex items-center gap-2.5 ${s.cls}`}
+                  >
+                    {s.icon}
+                    <div>
+                      <p className="text-[10px] text-zinc-400 uppercase tracking-wide font-semibold">
+                        {s.label}
+                      </p>
+                      <p className="text-xl font-bold text-zinc-900 leading-none mt-0.5">
+                        {s.value}
+                      </p>
+                    </div>
+                  </div>
+                ))}
+              </div>
+
+              {/* Erros detalhados */}
+              {result.erros.length > 0 && (
+                <div className="rounded-lg border border-red-200 bg-red-50 p-3">
+                  <p className="text-xs font-semibold text-red-700 mb-2 flex items-center gap-1.5">
+                    <XCircle className="h-3.5 w-3.5" /> {result.erros.length}{' '}
+                    erro{result.erros.length !== 1 ? 's' : ''} encontrado
+                    {result.erros.length !== 1 ? 's' : ''}
+                  </p>
+                  <div className="space-y-1 max-h-40 overflow-y-auto">
+                    {result.erros.map((e, i) => (
+                      <p key={i} className="text-[11px] text-red-600">
+                        <span className="font-semibold">Linha {e.linha}:</span>{' '}
+                        {e.motivo}
+                      </p>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              <button
+                type="button"
+                onClick={reset}
+                className="w-full text-xs text-zinc-500 hover:text-zinc-800 underline transition-colors"
+              >
+                Importar outro ficheiro
+              </button>
+            </div>
+          )}
+        </div>
+
+        {/* Footer */}
+        {!result && (
+          <div className="px-6 py-4 border-t border-zinc-100 shrink-0 flex gap-2.5 bg-white">
+            <Button
+              type="button"
+              variant="outline"
+              className="flex-1 h-9 rounded-lg border-zinc-200 text-sm"
+              onClick={() => onOpenChange(false)}
+            >
+              Cancelar
+            </Button>
+            <Button
+              onClick={handleImport}
+              disabled={!file || uploading}
+              className="flex-1 h-9 rounded-lg bg-blue-600 hover:bg-blue-700 text-white text-sm font-medium gap-2"
+            >
+              {uploading ? (
+                <>
+                  <Loader2 className="h-4 w-4 animate-spin" /> A importar...
+                </>
+              ) : (
+                <>
+                  <Upload className="h-4 w-4" /> Importar
+                </>
+              )}
+            </Button>
+          </div>
+        )}
+      </SheetContent>
+    </Sheet>
+  )
+}
+
 // ── Página principal ──────────────────────────────────────────
 export default function UtilizadoresPage() {
   const [utilizadores, setUtilizadores] = useState<Utilizador[]>([])
@@ -241,6 +631,7 @@ export default function UtilizadoresPage() {
   const [pelouroSel, setPelouroSel] = useState('')
   const [direcaoSel, setDirecaoSel] = useState('')
   const [sheetOpen, setSheetOpen] = useState(false)
+  const [importOpen, setImportOpen] = useState(false)
   const [editTarget, setEditTarget] = useState<Utilizador | null>(null)
   const [submitting, setSubmitting] = useState(false)
 
@@ -370,11 +761,6 @@ export default function UtilizadoresPage() {
       }
       toast.success(
         editTarget ? 'Funcionário actualizado' : 'Funcionário criado',
-        {
-          description: editTarget
-            ? `${values.nomeCompleto} foi actualizado com sucesso.`
-            : `${values.nomeCompleto} foi criado. Credenciais enviadas por email.`,
-        },
       )
       setSheetOpen(false)
       fetchUtilizadores()
@@ -394,10 +780,9 @@ export default function UtilizadoresPage() {
       toast.error(data.error)
       return
     }
-    const activado = data.estado === 'Activo'
-    toast.success(activado ? 'Conta activada' : 'Conta desactivada', {
-      description: `${u.nomeCompleto} foi ${activado ? 'activado' : 'desactivado'}.`,
-    })
+    toast.success(
+      data.estado === 'Activo' ? 'Conta activada' : 'Conta desactivada',
+    )
     fetchUtilizadores()
   }
   const resetSenha = async (u: Utilizador) => {
@@ -412,12 +797,9 @@ export default function UtilizadoresPage() {
       toast.error(data.error)
       return
     }
-    toast.success('Senha redefinida', {
-      description: `Nova senha enviada para ${u.email}.`,
-    })
+    toast.success('Senha redefinida')
   }
 
-  // Contagens por role para o cabeçalho
   const countByRole = utilizadores.reduce(
     (acc, u) => {
       acc[u.role] = (acc[u.role] ?? 0) + 1
@@ -429,7 +811,7 @@ export default function UtilizadoresPage() {
 
   return (
     <div className="space-y-6">
-      {/* ── Cabeçalho ── */}
+      {/* Cabeçalho */}
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
         <div>
           <h1 className="text-2xl font-bold text-zinc-900 tracking-tight">
@@ -442,20 +824,27 @@ export default function UtilizadoresPage() {
               : 'utilizadores registados'}
           </p>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 flex-wrap">
           <ExportMenu tipo="utilizadores" />
+          <Button
+            onClick={() => setImportOpen(true)}
+            variant="outline"
+            size="sm"
+            className="gap-2 h-9 border-zinc-200 text-zinc-600 hover:text-zinc-900 rounded-lg text-sm"
+          >
+            <Upload className="h-4 w-4" /> Importar Primavera
+          </Button>
           <Button
             onClick={abrirNovo}
             size="sm"
             className="gap-2 bg-zinc-950 hover:bg-zinc-800 text-white rounded-lg h-9 px-4 shadow-sm"
           >
-            <UserPlus className="h-4 w-4" />
-            Novo Funcionário
+            <UserPlus className="h-4 w-4" /> Novo Funcionário
           </Button>
         </div>
       </div>
 
-      {/* ── Mini stats ── */}
+      {/* Mini stats */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
         {[
           {
@@ -503,7 +892,7 @@ export default function UtilizadoresPage() {
         ))}
       </div>
 
-      {/* ── Filtros ── */}
+      {/* Filtros */}
       <Card className="border-zinc-200 shadow-none">
         <CardContent className="p-4">
           <div className="flex flex-wrap gap-3">
@@ -576,7 +965,7 @@ export default function UtilizadoresPage() {
         </CardContent>
       </Card>
 
-      {/* ── Tabela ── */}
+      {/* Tabela */}
       <Card className="border-zinc-200 shadow-sm overflow-hidden">
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
@@ -662,7 +1051,6 @@ export default function UtilizadoresPage() {
                       key={u.id}
                       className="group hover:bg-zinc-50/60 transition-colors duration-100"
                     >
-                      {/* Funcionário */}
                       <td className="px-4 py-3">
                         <div className="flex items-center gap-3">
                           <Avatar className="h-8 w-8 shrink-0 ring-1 ring-zinc-200/80">
@@ -684,22 +1072,16 @@ export default function UtilizadoresPage() {
                           </div>
                         </div>
                       </td>
-
-                      {/* Nº Mecanográfico */}
                       <td className="px-4 py-3">
                         <span className="text-[11px] font-mono text-zinc-500 bg-zinc-100 px-2 py-1 rounded-md">
                           {u.numeroMecanografico}
                         </span>
                       </td>
-
-                      {/* Cargo */}
                       <td className="px-4 py-3">
                         <span className="text-[13px] text-zinc-600 truncate block max-w-[130px]">
                           {u.cargo}
                         </span>
                       </td>
-
-                      {/* Perfil */}
                       <td className="px-4 py-3">
                         <span
                           className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-semibold border ${rc.badge}`}
@@ -710,8 +1092,6 @@ export default function UtilizadoresPage() {
                           {rc.label}
                         </span>
                       </td>
-
-                      {/* Departamento */}
                       <td className="px-4 py-3">
                         {u.departamento?.nome ? (
                           <span className="text-[12px] text-zinc-600 bg-zinc-50 border border-zinc-200 px-2 py-0.5 rounded-md">
@@ -721,8 +1101,6 @@ export default function UtilizadoresPage() {
                           <span className="text-zinc-300 text-xs">—</span>
                         )}
                       </td>
-
-                      {/* Estado */}
                       <td className="px-4 py-3">
                         <span
                           className={`inline-flex items-center gap-1.5 text-[12px] font-medium ${u.estado === 'Activo' ? 'text-emerald-700' : 'text-zinc-400'}`}
@@ -733,8 +1111,6 @@ export default function UtilizadoresPage() {
                           {u.estado}
                         </span>
                       </td>
-
-                      {/* Acções */}
                       <td className="px-4 py-3 text-right">
                         <DropdownMenu>
                           <DropdownMenuTrigger asChild>
@@ -780,8 +1156,6 @@ export default function UtilizadoresPage() {
             </tbody>
           </table>
         </div>
-
-        {/* Paginação */}
         {meta.totalPages > 1 && (
           <div className="flex items-center justify-between px-4 py-3 border-t border-zinc-100 bg-zinc-50/50">
             <p className="text-xs text-zinc-400">
@@ -795,7 +1169,7 @@ export default function UtilizadoresPage() {
               <button
                 onClick={() => setPage((p) => Math.max(1, p - 1))}
                 disabled={page === 1}
-                className="h-7 w-7 rounded-lg flex items-center justify-center hover:bg-zinc-200 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+                className="h-7 w-7 rounded-lg flex items-center justify-center hover:bg-zinc-200 disabled:opacity-30 transition-colors"
               >
                 <ChevronLeft className="h-4 w-4" />
               </button>
@@ -805,7 +1179,7 @@ export default function UtilizadoresPage() {
               <button
                 onClick={() => setPage((p) => Math.min(meta.totalPages, p + 1))}
                 disabled={page === meta.totalPages}
-                className="h-7 w-7 rounded-lg flex items-center justify-center hover:bg-zinc-200 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+                className="h-7 w-7 rounded-lg flex items-center justify-center hover:bg-zinc-200 disabled:opacity-30 transition-colors"
               >
                 <ChevronRight className="h-4 w-4" />
               </button>
@@ -814,10 +1188,9 @@ export default function UtilizadoresPage() {
         )}
       </Card>
 
-      {/* ── Sheet criar / editar ── */}
+      {/* Sheet criar/editar */}
       <Sheet open={sheetOpen} onOpenChange={setSheetOpen}>
         <SheetContent className="w-full sm:max-w-md flex flex-col gap-0 p-0 overflow-hidden">
-          {/* Header */}
           <SheetHeader className="px-6 py-5 border-b border-zinc-100 shrink-0">
             <div className="flex items-center gap-3">
               <div
@@ -841,15 +1214,12 @@ export default function UtilizadoresPage() {
               </div>
             </div>
           </SheetHeader>
-
-          {/* Body */}
           <div className="flex-1 overflow-y-auto px-6 py-5">
             <form
               id="form-funcionario"
               onSubmit={handleSubmit(onSubmit)}
               className="space-y-6"
             >
-              {/* ── Dados pessoais ── */}
               <div>
                 <p className="text-[10px] font-bold text-zinc-400 uppercase tracking-[0.12em] mb-3">
                   Dados pessoais
@@ -870,16 +1240,15 @@ export default function UtilizadoresPage() {
                       </p>
                     )}
                   </div>
-
                   <div className="grid grid-cols-2 gap-3">
                     <div className="space-y-1.5">
                       <Label className="text-sm font-medium text-zinc-700">
-                        Email corporativo
+                        Email
                       </Label>
                       <Input
                         {...register('email')}
                         type="email"
-                        placeholder="joao@empresa.ao"
+                        placeholder="joao@adapec.ao"
                         className="h-9 rounded-lg border-zinc-200 text-sm"
                       />
                       {errors.email && (
@@ -904,7 +1273,6 @@ export default function UtilizadoresPage() {
                       )}
                     </div>
                   </div>
-
                   <div className="grid grid-cols-2 gap-3">
                     <div className="space-y-1.5">
                       <Label className="text-sm font-medium text-zinc-700">
@@ -923,7 +1291,7 @@ export default function UtilizadoresPage() {
                     </div>
                     <div className="space-y-1.5">
                       <Label className="text-sm font-medium text-zinc-700">
-                        Perfil de acesso
+                        Perfil
                       </Label>
                       <Select
                         defaultValue={editTarget?.role}
@@ -950,10 +1318,7 @@ export default function UtilizadoresPage() {
                   </div>
                 </div>
               </div>
-
               <Separator />
-
-              {/* ── Hierarquia organizacional ── */}
               <div>
                 <p className="text-[10px] font-bold text-zinc-400 uppercase tracking-[0.12em] mb-3">
                   Hierarquia organizacional
@@ -979,15 +1344,9 @@ export default function UtilizadoresPage() {
                       </SelectContent>
                     </Select>
                   </div>
-
                   <div className="space-y-1.5">
                     <Label className="text-sm font-medium text-zinc-700">
                       Direção
-                      {pelouroSel && direcoesFiltradas.length === 0 && (
-                        <span className="text-[11px] text-zinc-400 font-normal ml-1.5">
-                          (sem direções)
-                        </span>
-                      )}
                     </Label>
                     <Select
                       value={direcaoSel}
@@ -1014,15 +1373,9 @@ export default function UtilizadoresPage() {
                       </SelectContent>
                     </Select>
                   </div>
-
                   <div className="space-y-1.5">
                     <Label className="text-sm font-medium text-zinc-700">
                       Departamento
-                      {direcaoSel && deptsFiltrados.length === 0 && (
-                        <span className="text-[11px] text-zinc-400 font-normal ml-1.5">
-                          (sem departamentos)
-                        </span>
-                      )}
                     </Label>
                     <Select
                       defaultValue={editTarget?.departamento?.id ?? ''}
@@ -1053,8 +1406,6 @@ export default function UtilizadoresPage() {
               </div>
             </form>
           </div>
-
-          {/* Footer */}
           <div className="px-6 py-4 border-t border-zinc-100 shrink-0 flex gap-2.5 bg-white">
             <Button
               type="button"
@@ -1081,6 +1432,13 @@ export default function UtilizadoresPage() {
           </div>
         </SheetContent>
       </Sheet>
+
+      {/* Sheet de importação */}
+      <ImportSheet
+        open={importOpen}
+        onOpenChange={setImportOpen}
+        onSuccess={fetchUtilizadores}
+      />
     </div>
   )
 }

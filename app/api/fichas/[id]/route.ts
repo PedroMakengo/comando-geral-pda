@@ -31,7 +31,7 @@ export async function GET(req: NextRequest, { params }: Params) {
           id: true,
           nomeCompleto: true,
           cargo: true,
-          role: true, // ← OBRIGATÓRIO para distinguir Técnico vs ChefeDepartamento
+          role: true,
           email: true,
           numeroMecanografico: true,
           avatarUrl: true,
@@ -48,14 +48,14 @@ export async function GET(req: NextRequest, { params }: Params) {
           activo: true,
         },
       },
-      submissoes: {
-        orderBy: { dataSubmissao: 'asc' },
+      // submissao — singular, @unique fichaId
+      submissao: {
         select: {
           id: true,
-          tipo: true,
           comentarios: true,
           pontuacaoTotal: true,
           dataSubmissao: true,
+          updatedAt: true,
           avaliador: { select: { id: true, nomeCompleto: true, role: true } },
           respostas: {
             select: {
@@ -64,17 +64,8 @@ export async function GET(req: NextRequest, { params }: Params) {
               observacao: true,
               criterio: { select: { id: true, nome: true, peso: true } },
             },
+            orderBy: { criterio: { nome: 'asc' } },
           },
-        },
-      },
-      reavaliacao: {
-        select: {
-          id: true,
-          motivacao: true,
-          dataIndicacao: true,
-          concluida: true,
-          reavaliador: { select: { id: true, nomeCompleto: true } },
-          indicadoPor: { select: { id: true, nomeCompleto: true, role: true } },
         },
       },
       validacao: {

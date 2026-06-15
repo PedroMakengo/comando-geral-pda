@@ -78,6 +78,7 @@ export async function getCurrentUser() {
       pelouro: { select: { id: true, nome: true } },
       direcao: { select: { id: true, nome: true } },
       departamento: { select: { id: true, nome: true } },
+      chefeDe: { select: { id: true, nome: true } },
     },
   })
 }

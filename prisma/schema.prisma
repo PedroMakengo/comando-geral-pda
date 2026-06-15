@@ -1,10 +1,12 @@
-// This is your Prisma schema file,
-// learn more about it in the docs: https://pris.ly/d/prisma-schema
+// ═══════════════════════════════════════════════════════════════
+// PRISMA SCHEMA
+// Fluxo simplificado: apenas o Chefe avalia o Técnico
+// Pendente → AvaliadoPorChefe → ValidadoPorDirector
+// ═══════════════════════════════════════════════════════════════
 
 generator client {
-  provider = "prisma-client-js"
-  //output = "../src/generated/prisma"
-  moduleFormat = "cjs"
+  provider      = "prisma-client-js"
+  moduleFormat  = "cjs"
 }
 
 datasource db {
@@ -19,7 +21,7 @@ datasource db {
 enum Role {
   Master              // Gestão global do sistema
   Director            // Gestão da sua Direção
-  ChefeDepartamento   // Gestão do seu Departamento
+  ChefeDepartamento   // Avalia os Técnicos do seu Departamento
   Tecnico             // Funcionário avaliável
 }
 
@@ -29,18 +31,9 @@ enum Estado {
 }
 
 enum EstadoAvaliacao {
-  Pendente
-  AutoAvaliacao
-  AvaliadoPorChefe
-  EmReavaliacao
-  Reavaliado
-  ValidadoPorDirector
-}
-
-enum TipoAvaliacao {
-  AutoAvaliacao
-  AvaliacaoChefe
-  Reavaliacao
+  Pendente             // Ficha criada, aguarda avaliação do Chefe
+  AvaliadoPorChefe     // Chefe submeteu a avaliação
+  ValidadoPorDirector  // Director validou (aprovado ou rejeitado)
 }
 
 // ───────────────────────────────────────────────────────────────
@@ -48,11 +41,11 @@ enum TipoAvaliacao {
 // ───────────────────────────────────────────────────────────────
 
 model Pelouro {
-  id           String      @id @default(uuid())
-  nome         String      @unique
-  descricao    String?
-  dataCriacao  DateTime    @default(now())
-  updatedAt    DateTime    @updatedAt
+  id          String   @id @default(uuid())
+  nome        String   @unique
+  descricao   String?
+  dataCriacao DateTime @default(now())
+  updatedAt   DateTime @updatedAt
 
   direcoes     Direcao[]
   utilizadores Utilizador[]
@@ -65,14 +58,14 @@ model Pelouro {
 // ───────────────────────────────────────────────────────────────
 
 model Direcao {
-  id           String      @id @default(uuid())
-  nome         String      @unique
-  descricao    String?
-  dataCriacao  DateTime    @default(now())
-  updatedAt    DateTime    @updatedAt
+  id          String   @id @default(uuid())
+  nome        String   @unique
+  descricao   String?
+  dataCriacao DateTime @default(now())
+  updatedAt   DateTime @updatedAt
 
-  pelouroId    String
-  pelouro      Pelouro     @relation(fields: [pelouroId], references: [id])
+  pelouroId String
+  pelouro   Pelouro @relation(fields: [pelouroId], references: [id])
 
   departamentos Departamento[]
   utilizadores  Utilizador[]
@@ -85,20 +78,18 @@ model Direcao {
 // ───────────────────────────────────────────────────────────────
 
 model Departamento {
-  id           String      @id @default(uuid())
-  nome         String
-  dataCriacao  DateTime    @default(now())
-  updatedAt    DateTime    @updatedAt
+  id          String   @id @default(uuid())
+  nome        String
+  dataCriacao DateTime @default(now())
+  updatedAt   DateTime @updatedAt
 
-  direcaoId    String
-  direcao      Direcao     @relation(fields: [direcaoId], references: [id])
+  direcaoId String
+  direcao   Direcao @relation(fields: [direcaoId], references: [id])
 
-  chefeId      String?     @unique
-  chefe        Utilizador? @relation("ChefeDoDepartamento", fields: [chefeId], references: [id])
+  chefeId String?    @unique
+  chefe   Utilizador? @relation("ChefeDoDepartamento", fields: [chefeId], references: [id])
 
-  utilizadores Utilizador[] @relation("DepartamentoUtilizadores")
-
-  // Relação M:N com Criterio via tabela pivot
+  utilizadores Utilizador[]         @relation("DepartamentoUtilizadores")
   criterios    CriterioDepartamento[]
 
   @@map("departamento")
@@ -107,17 +98,47 @@ model Departamento {
 // ───────────────────────────────────────────────────────────────
 // UTILIZADOR
 // ───────────────────────────────────────────────────────────────
+enum Genero {
+  Masculino
+  Feminino
+  Outro
+}
+
+// 2. Substituir o model Utilizador pelo seguinte:
 
 model Utilizador {
   id                   String    @id @default(uuid())
 
+  // ── Identificação ────────────────────────────────────────────
   nomeCompleto         String
+  nomeAbreviado        String?
   email                String    @unique
   numeroMecanografico  String    @unique
   passwordHash         String
   cargo                String
   avatarUrl            String
 
+  // ── Dados pessoais ───────────────────────────────────────────
+  dataNascimento       DateTime?
+  genero               Genero?
+  nacionalidade        String?
+  naturalidade         String?
+
+  // ── Contacto ─────────────────────────────────────────────────
+  telefone             String?
+  telemovel            String?
+  extensao             String?
+
+  // ── Localização ──────────────────────────────────────────────
+  morada               String?
+  localidade           String?
+  codigoPostal         String?
+  pais                 String?   @default("Angola")
+  provincia            String?
+  municipio            String?
+  comuna               String?
+
+  // ── Sistema ──────────────────────────────────────────────────
   role                 Role      @default(Tecnico)
   estado               Estado    @default(Activo)
 
@@ -125,6 +146,7 @@ model Utilizador {
   createdAt            DateTime  @default(now())
   updatedAt            DateTime  @updatedAt
 
+  // ── Relações organizacionais ──────────────────────────────────
   pelouroId            String?
   pelouro              Pelouro?      @relation(fields: [pelouroId], references: [id])
 
@@ -136,30 +158,30 @@ model Utilizador {
 
   chefeDe              Departamento? @relation("ChefeDoDepartamento")
 
+  // ── Relações de avaliação ─────────────────────────────────────
   fichasComoAvaliado   FichaAvaliacao[]     @relation("FichaAvaliado")
   submissoesFeitas     SubmissaoAvaliacao[] @relation("SubmissaoAvaliador")
-  reavalacoesIndicadas ReavaliacaoIndicada[] @relation("ReavaliadorIndicado")
-  reavalacoesQueIndicou ReavaliacaoIndicada[] @relation("QuemIndicou")
   validacoes           ValidacaoDirector[]  @relation("DirectorValidador")
   criteriosComoTecnico Criterio[]           @relation("CriterioParaTecnico")
 
   @@map("utilizador")
 }
 
+
 // ───────────────────────────────────────────────────────────────
 // PERÍODO DE AVALIAÇÃO
 // ───────────────────────────────────────────────────────────────
 
 model PeriodoAvaliacao {
-  id          String    @id @default(uuid())
-  nome        String
-  dataInicio  DateTime
-  dataFim     DateTime
-  activo      Boolean   @default(false)
-  createdAt   DateTime  @default(now())
-  updatedAt   DateTime  @updatedAt
+  id         String   @id @default(uuid())
+  nome       String
+  dataInicio DateTime
+  dataFim    DateTime
+  activo     Boolean  @default(false)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
 
-  fichas      FichaAvaliacao[]
+  fichas FichaAvaliacao[]
 
   @@map("periodo_avaliacao")
 }
@@ -169,21 +191,21 @@ model PeriodoAvaliacao {
 // ───────────────────────────────────────────────────────────────
 
 model Criterio {
-  id          String    @id @default(uuid())
-  nome        String
-  descricao   String?
-  peso        Float     @default(1.0)
-  createdAt   DateTime  @default(now())
-  updatedAt   DateTime  @updatedAt
+  id        String   @id @default(uuid())
+  nome      String
+  descricao String?
+  peso      Float    @default(1.0)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
-  // Relação M:N com Departamento via tabela pivot
+  // Critério atribuído a um ou mais Departamentos (M:N)
   departamentos CriterioDepartamento[]
 
-  // Ou scoped a um Técnico específico (individual)
-  tecnicoId   String?
-  tecnico     Utilizador? @relation("CriterioParaTecnico", fields: [tecnicoId], references: [id])
+  // Critério scoped a um Técnico específico (individual)
+  tecnicoId String?
+  tecnico   Utilizador? @relation("CriterioParaTecnico", fields: [tecnicoId], references: [id])
 
-  respostas   CriterioResposta[]
+  respostas CriterioResposta[]
 
   @@map("criterio")
 }
@@ -193,8 +215,8 @@ model Criterio {
 // ───────────────────────────────────────────────────────────────
 
 model CriterioDepartamento {
-  criterioId     String
-  criterio       Criterio     @relation(fields: [criterioId], references: [id], onDelete: Cascade)
+  criterioId String
+  criterio   Criterio @relation(fields: [criterioId], references: [id], onDelete: Cascade)
 
   departamentoId String
   departamento   Departamento @relation(fields: [departamentoId], references: [id], onDelete: Cascade)
@@ -205,24 +227,28 @@ model CriterioDepartamento {
 
 // ───────────────────────────────────────────────────────────────
 // FICHA DE AVALIAÇÃO
+// Uma ficha por Técnico por Período. Criada automaticamente
+// quando o Período de Avaliação é activado.
 // ───────────────────────────────────────────────────────────────
 
 model FichaAvaliacao {
-  id              String          @id @default(uuid())
-  estado          EstadoAvaliacao @default(Pendente)
-  pontuacaoFinal  Float?
-  createdAt       DateTime        @default(now())
-  updatedAt       DateTime        @updatedAt
+  id             String          @id @default(uuid())
+  estado         EstadoAvaliacao @default(Pendente)
+  pontuacaoFinal Float?
+  createdAt      DateTime        @default(now())
+  updatedAt      DateTime        @updatedAt
 
-  avaliadoId      String
-  avaliado        Utilizador      @relation("FichaAvaliado", fields: [avaliadoId], references: [id])
+  avaliadoId String
+  avaliado   Utilizador @relation("FichaAvaliado", fields: [avaliadoId], references: [id])
 
-  periodoId       String
-  periodo         PeriodoAvaliacao @relation(fields: [periodoId], references: [id])
+  periodoId String
+  periodo   PeriodoAvaliacao @relation(fields: [periodoId], references: [id])
 
-  submissoes      SubmissaoAvaliacao[]
-  reavaliacao     ReavaliacaoIndicada?
-  validacao       ValidacaoDirector?
+  // Uma única submissão por ficha (feita pelo Chefe)
+  submissao SubmissaoAvaliacao?
+
+  // Uma única validação por ficha (feita pelo Director)
+  validacao ValidacaoDirector?
 
   @@unique([avaliadoId, periodoId])
   @@map("ficha_avaliacao")
@@ -230,82 +256,68 @@ model FichaAvaliacao {
 
 // ───────────────────────────────────────────────────────────────
 // SUBMISSÃO DE AVALIAÇÃO
+// Sempre feita pelo ChefeDepartamento. Uma por Ficha.
 // ───────────────────────────────────────────────────────────────
 
 model SubmissaoAvaliacao {
-  id             String         @id @default(uuid())
-  tipo           TipoAvaliacao
+  id             String   @id @default(uuid())
   comentarios    String?
   pontuacaoTotal Float?
-  dataSubmissao  DateTime       @default(now())
+  dataSubmissao  DateTime @default(now())
+  updatedAt      DateTime @updatedAt
 
-  fichaId        String
-  ficha          FichaAvaliacao @relation(fields: [fichaId], references: [id], onDelete: Cascade)
+  // @unique garante no máximo 1 submissão por ficha
+  fichaId String         @unique
+  ficha   FichaAvaliacao @relation(fields: [fichaId], references: [id], onDelete: Cascade)
 
-  avaliadorId    String
-  avaliador      Utilizador     @relation("SubmissaoAvaliador", fields: [avaliadorId], references: [id])
+  // O avaliador é sempre o ChefeDepartamento
+  avaliadorId String
+  avaliador   Utilizador @relation("SubmissaoAvaliador", fields: [avaliadorId], references: [id])
 
-  respostas      CriterioResposta[]
+  respostas CriterioResposta[]
 
   @@map("submissao_avaliacao")
 }
 
 // ───────────────────────────────────────────────────────────────
 // CRITÉRIO RESPOSTA
+// Pontuação dada pelo Chefe a cada Critério na Submissão.
 // ───────────────────────────────────────────────────────────────
 
 model CriterioResposta {
-  id           String             @id @default(uuid())
-  pontuacao    Float
-  observacao   String?
+  id         String  @id @default(uuid())
+  pontuacao  Float
+  observacao String?
 
-  submissaoId  String
-  submissao    SubmissaoAvaliacao @relation(fields: [submissaoId], references: [id], onDelete: Cascade)
+  submissaoId String
+  submissao   SubmissaoAvaliacao @relation(fields: [submissaoId], references: [id], onDelete: Cascade)
 
-  criterioId   String
-  criterio     Criterio           @relation(fields: [criterioId], references: [id])
+  criterioId String
+  criterio   Criterio @relation(fields: [criterioId], references: [id])
 
   @@unique([submissaoId, criterioId])
   @@map("criterio_resposta")
 }
 
 // ───────────────────────────────────────────────────────────────
-// REAVALIAÇÃO INDICADA
-// ───────────────────────────────────────────────────────────────
-
-model ReavaliacaoIndicada {
-  id             String         @id @default(uuid())
-  motivacao      String?
-  dataIndicacao  DateTime       @default(now())
-  concluida      Boolean        @default(false)
-
-  fichaId        String         @unique
-  ficha          FichaAvaliacao @relation(fields: [fichaId], references: [id], onDelete: Cascade)
-
-  reavaliadorId  String
-  reavaliador    Utilizador     @relation("ReavaliadorIndicado", fields: [reavaliadorId], references: [id])
-
-  indicadoPorId  String
-  indicadoPor    Utilizador     @relation("QuemIndicou", fields: [indicadoPorId], references: [id])
-
-  @@map("reavaliacao_indicada")
-}
-
-// ───────────────────────────────────────────────────────────────
 // VALIDAÇÃO DO DIRECTOR
+// Director aprova ou rejeita a avaliação feita pelo Chefe.
+// Se rejeitada, o campo 'comentarios' deve explicar o motivo,
+// e o estado da FichaAvaliacao volta a Pendente para nova
+// submissão do Chefe.
 // ───────────────────────────────────────────────────────────────
 
 model ValidacaoDirector {
-  id             String         @id @default(uuid())
-  aprovado       Boolean
-  comentarios    String?
-  dataValidacao  DateTime       @default(now())
+  id            String   @id @default(uuid())
+  aprovado      Boolean
+  comentarios   String?
+  dataValidacao DateTime @default(now())
 
-  fichaId        String         @unique
-  ficha          FichaAvaliacao @relation(fields: [fichaId], references: [id], onDelete: Cascade)
+  fichaId String         @unique
+  ficha   FichaAvaliacao @relation(fields: [fichaId], references: [id], onDelete: Cascade)
 
-  directorId     String
-  director       Utilizador     @relation("DirectorValidador", fields: [directorId], references: [id])
+  directorId String
+  director   Utilizador @relation("DirectorValidador", fields: [directorId], references: [id])
 
   @@map("validacao_director")
 }

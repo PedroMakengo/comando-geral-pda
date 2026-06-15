@@ -13,6 +13,8 @@ import {
   Filter,
   FileText,
   ClipboardList,
+  Download,
+  Loader2,
 } from 'lucide-react'
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar'
 import { Input } from '@/components/ui/input'
@@ -58,17 +60,38 @@ interface Ficha {
     dataFim: string
     activo: boolean
   }
-  _count?: { submissoes: number }
+  submissao?: { pontuacaoTotal?: number | null } | null
   validacao?: { aprovado: boolean; dataValidacao: string } | null
-  reavaliacao?: { concluida: boolean } | null
 }
-interface FichaDetalhe extends Ficha {
-  submissoes: {
+interface FichaDetalhe {
+  id: string
+  estado: string
+  pontuacaoFinal?: number | null
+  createdAt: string
+  avaliado: {
     id: string
-    tipo: string
+    nomeCompleto: string
+    cargo: string
+    email: string
+    numeroMecanografico: string
+    avatarUrl?: string
+    departamento?: { id: string; nome: string } | null
+    direcao?: { id: string; nome: string } | null
+  }
+  periodo: {
+    id: string
+    nome: string
+    dataInicio: string
+    dataFim: string
+    activo: boolean
+  }
+  // submissao singular — schema novo
+  submissao?: {
+    id: string
     comentarios?: string | null
     pontuacaoTotal?: number | null
     dataSubmissao: string
+    updatedAt: string
     avaliador: { id: string; nomeCompleto: string; role: string }
     respostas: {
       id: string
@@ -76,14 +99,6 @@ interface FichaDetalhe extends Ficha {
       observacao?: string | null
       criterio: { id: string; nome: string; peso: number }
     }[]
-  }[]
-  reavaliacao?: {
-    id: string
-    motivacao?: string | null
-    dataIndicacao: string
-    concluida: boolean
-    reavaliador: { id: string; nomeCompleto: string }
-    indicadoPor: { id: string; nomeCompleto: string; role: string }
   } | null
   validacao?: {
     id: string
@@ -107,13 +122,7 @@ interface Meta {
   limit: number
   totalPages: number
 }
-type SortKey =
-  | 'avaliado'
-  | 'departamento'
-  | 'periodo'
-  | 'estado'
-  | 'submissoes'
-  | 'pontuacao'
+type SortKey = 'avaliado' | 'departamento' | 'periodo' | 'estado' | 'pontuacao'
 interface SortState {
   key: SortKey | null
   direction: 'asc' | 'desc'
@@ -125,6 +134,19 @@ function toArray<T>(res: unknown): T[] {
   if (res && typeof res === 'object' && Array.isArray((res as any).data))
     return (res as any).data
   return []
+}
+async function safeFetch(url: string) {
+  try {
+    const res = await fetch(url, { credentials: 'include' })
+    if (!res.ok) {
+      console.error(`[safeFetch] ${url} → ${res.status}`)
+      return null
+    }
+    return res.json()
+  } catch (e) {
+    console.error(`[safeFetch]`, e)
+    return null
+  }
 }
 function getInitials(name: string) {
   return name
@@ -142,36 +164,19 @@ function formatDate(iso: string) {
   })
 }
 
-const estadoConfig: Record<string, { label: string; class: string }> = {
+const estadoConfig: Record<string, { label: string; cls: string }> = {
   Pendente: {
     label: 'Pendente',
-    class: 'bg-zinc-100 text-zinc-600 border-zinc-200',
-  },
-  AutoAvaliacao: {
-    label: 'Auto-avaliação',
-    class: 'bg-blue-50 text-blue-700 border-blue-200',
+    cls: 'bg-zinc-100 text-zinc-600 border-zinc-200',
   },
   AvaliadoPorChefe: {
     label: 'Av. p/ Chefe',
-    class: 'bg-purple-50 text-purple-700 border-purple-200',
-  },
-  EmReavaliacao: {
-    label: 'Em Reavaliação',
-    class: 'bg-amber-50 text-amber-700 border-amber-200',
-  },
-  Reavaliado: {
-    label: 'Reavaliado',
-    class: 'bg-orange-50 text-orange-700 border-orange-200',
+    cls: 'bg-purple-50 text-purple-700 border-purple-200',
   },
   ValidadoPorDirector: {
     label: 'Validado',
-    class: 'bg-emerald-50 text-emerald-700 border-emerald-200',
+    cls: 'bg-emerald-50 text-emerald-700 border-emerald-200',
   },
-}
-const tipoLabel: Record<string, string> = {
-  AutoAvaliacao: 'Auto-avaliação',
-  AvaliacaoChefe: 'Avaliação do Chefe',
-  Reavaliacao: 'Reavaliação',
 }
 
 function getSortValue(f: Ficha, key: SortKey): string | number {
@@ -184,8 +189,6 @@ function getSortValue(f: Ficha, key: SortKey): string | number {
       return f.periodo.nome ?? ''
     case 'estado':
       return estadoConfig[f.estado]?.label ?? f.estado
-    case 'submissoes':
-      return f._count?.submissoes ?? 0
     case 'pontuacao':
       return f.pontuacaoFinal ?? -1
   }
@@ -235,8 +238,8 @@ function SortHeader({
   )
 }
 
-function PontuacaoBar({ valor, max = 5 }: { valor: number; max?: number }) {
-  const pct = Math.min(100, (valor / max) * 100)
+function PontuacaoBar({ valor }: { valor: number }) {
+  const pct = Math.min(100, (valor / 5) * 100)
   const cor =
     pct >= 80
       ? 'bg-emerald-500'
@@ -257,6 +260,57 @@ function PontuacaoBar({ valor, max = 5 }: { valor: number; max?: number }) {
         {valor.toFixed(1)}
       </span>
     </div>
+  )
+}
+
+// ── Download ficha PDF ────────────────────────────────────────
+function DownloadFichaBtn({
+  fichaId,
+  mecanografico,
+  periodoNome,
+}: {
+  fichaId: string
+  mecanografico: string
+  periodoNome: string
+}) {
+  const [loading, setLoading] = useState(false)
+  const handleDownload = async () => {
+    setLoading(true)
+    try {
+      const res = await fetch(`/api/fichas/${fichaId}/pdf`, {
+        credentials: 'include',
+      })
+      if (!res.ok) {
+        toast.error('Não foi possível gerar o PDF.')
+        return
+      }
+      const blob = await res.blob()
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = `ficha-${mecanografico}-${periodoNome.replace(/\s+/g, '-')}.pdf`
+      a.click()
+      URL.revokeObjectURL(url)
+    } catch {
+      toast.error('Erro ao gerar o PDF.')
+    } finally {
+      setLoading(false)
+    }
+  }
+  return (
+    <button
+      type="button"
+      onClick={handleDownload}
+      disabled={loading}
+      className="flex items-center gap-1.5 text-xs font-semibold bg-zinc-950 hover:bg-zinc-800 text-white px-3 py-1.5 rounded-lg transition-colors disabled:opacity-50 shrink-0"
+    >
+      {loading ? (
+        <Loader2 className="h-3.5 w-3.5 animate-spin" />
+      ) : (
+        <Download className="h-3.5 w-3.5" />
+      )}
+      {loading ? 'A gerar...' : 'Baixar PDF'}
+    </button>
   )
 }
 
@@ -299,12 +353,9 @@ export default function FichasPage() {
       if (filtroEstado !== '_all') params.set('estado', filtroEstado)
       if (filtroPeriodo !== '_all') params.set('periodoId', filtroPeriodo)
       if (filtroDept !== '_all') params.set('departamentoId', filtroDept)
-      const res = await fetch(`/api/fichas?${params}`, {
-        credentials: 'include',
-      })
-      const data = await res.json()
+      const data = await safeFetch(`/api/fichas?${params}`)
       setFichas(toArray<Ficha>(data))
-      if (data.meta) setMeta(data.meta)
+      if (data?.meta) setMeta(data.meta)
     } catch {
       toast.error('Não foi possível carregar as fichas.')
     } finally {
@@ -315,16 +366,14 @@ export default function FichasPage() {
   useEffect(() => {
     fetchFichas()
   }, [fetchFichas])
+
   useEffect(() => {
-    fetch('/api/periodos?limit=100', { credentials: 'include' })
-      .then((r) => r.json())
-      .then((d) => setPeriodos(toArray(d)))
-      .catch(() => {})
-    fetch('/api/departamentos?limit=100', { credentials: 'include' })
-      .then((r) => r.json())
-      .then((d) => setDepartamentos(toArray(d)))
-      .catch(() => {})
+    safeFetch('/api/periodos?limit=100').then((d) => setPeriodos(toArray(d)))
+    safeFetch('/api/departamentos?limit=100').then((d) =>
+      setDepartamentos(toArray(d)),
+    )
   }, [])
+
   useEffect(() => {
     const t = setTimeout(() => {
       setSearch(searchInput)
@@ -338,8 +387,8 @@ export default function FichasPage() {
     setFichaDetalhe(null)
     setLoadingSheet(true)
     try {
-      const res = await fetch(`/api/fichas/${f.id}`, { credentials: 'include' })
-      setFichaDetalhe(await res.json())
+      const data = await safeFetch(`/api/fichas/${f.id}`)
+      setFichaDetalhe(data)
     } catch {
       toast.error('Não foi possível carregar o detalhe da ficha.')
     } finally {
@@ -354,22 +403,22 @@ export default function FichasPage() {
             f.avaliado.nomeCompleto
               ?.toLowerCase()
               .includes(search.toLowerCase()) ||
-            f.avaliado.email
-              ?.toLowerCase() // ← adiciona ?. aqui
-              .includes(search.toLowerCase()),
+            f.avaliado.email?.toLowerCase().includes(search.toLowerCase()),
         )
       : fichas,
     sort,
   )
 
-  // Mini stats
   const validadas = fichas.filter(
     (f) => f.estado === 'ValidadoPorDirector',
   ).length
   const emProcesso = fichas.filter(
-    (f) => !['Pendente', 'ValidadoPorDirector'].includes(f.estado),
+    (f) => f.estado === 'AvaliadoPorChefe',
   ).length
   const pendentes = fichas.filter((f) => f.estado === 'Pendente').length
+
+  // Download disponível apenas quando ValidadoPorDirector
+  const podeDownload = fichaDetalhe?.estado === 'ValidadoPorDirector'
 
   return (
     <div className="space-y-6">
@@ -403,11 +452,11 @@ export default function FichasPage() {
             color: 'text-emerald-600',
           },
           {
-            label: 'Em Processo',
+            label: 'Av. Chefe',
             value: emProcesso,
             icon: <FileText className="h-4 w-4" />,
-            bg: 'bg-blue-50 border-blue-200',
-            color: 'text-blue-600',
+            bg: 'bg-purple-50 border-purple-200',
+            color: 'text-purple-600',
           },
           {
             label: 'Pendentes',
@@ -535,12 +584,6 @@ export default function FichasPage() {
                   onSort={handleSort}
                 />
                 <SortHeader
-                  label="Submissões"
-                  sortKey="submissoes"
-                  sort={sort}
-                  onSort={handleSort}
-                />
-                <SortHeader
                   label="Pontuação"
                   sortKey="pontuacao"
                   sort={sort}
@@ -553,7 +596,7 @@ export default function FichasPage() {
               {loading ? (
                 Array.from({ length: 8 }).map((_, i) => (
                   <tr key={i}>
-                    {Array.from({ length: 6 }).map((_, j) => (
+                    {Array.from({ length: 5 }).map((_, j) => (
                       <td key={j} className="px-4 py-3.5">
                         <div
                           className={`h-3.5 bg-zinc-100 rounded-full animate-pulse ${j === 0 ? 'w-40' : 'w-20'}`}
@@ -564,7 +607,7 @@ export default function FichasPage() {
                 ))
               ) : fichasFiltradas.length === 0 ? (
                 <tr>
-                  <td colSpan={6} className="px-4 py-16 text-center">
+                  <td colSpan={5} className="px-4 py-16 text-center">
                     <div className="flex flex-col items-center gap-2">
                       <div className="h-12 w-12 rounded-xl bg-zinc-100 flex items-center justify-center">
                         <ClipboardList className="h-6 w-6 text-zinc-300" />
@@ -582,13 +625,13 @@ export default function FichasPage() {
                 fichasFiltradas.map((f) => {
                   const est = estadoConfig[f.estado] ?? {
                     label: f.estado,
-                    class: 'bg-zinc-100 text-zinc-600 border-zinc-200',
+                    cls: 'bg-zinc-100 text-zinc-600 border-zinc-200',
                   }
                   return (
                     <tr
                       key={f.id}
                       onClick={() => abrirFicha(f)}
-                      className="group hover:bg-zinc-50/60 transition-colors duration-100 cursor-pointer"
+                      className="group hover:bg-zinc-50/60 transition-colors cursor-pointer"
                     >
                       <td className="px-4 py-3">
                         <div className="flex items-center gap-3">
@@ -615,16 +658,9 @@ export default function FichasPage() {
                       </td>
                       <td className="px-4 py-3">
                         <span
-                          className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-[11px] font-semibold border ${est.class}`}
+                          className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-[11px] font-semibold border ${est.cls}`}
                         >
                           {est.label}
-                        </span>
-                      </td>
-                      <td className="px-4 py-3">
-                        <span
-                          className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[11px] font-semibold ${(f._count?.submissoes ?? 0) > 0 ? 'bg-blue-50 text-blue-700 border border-blue-200' : 'bg-zinc-50 text-zinc-400 border border-zinc-100'}`}
-                        >
-                          {f._count?.submissoes ?? 0}
                         </span>
                       </td>
                       <td className="px-4 py-3 min-w-[130px]">
@@ -680,21 +716,32 @@ export default function FichasPage() {
       <Sheet open={sheetOpen} onOpenChange={setSheetOpen}>
         <SheetContent className="w-full sm:max-w-lg flex flex-col gap-0 p-0 overflow-hidden">
           <SheetHeader className="px-6 py-5 border-b border-zinc-100 shrink-0">
-            <div className="flex items-center gap-3">
-              <div className="h-9 w-9 rounded-xl bg-zinc-100 flex items-center justify-center shrink-0">
-                <ClipboardList className="h-4 w-4 text-zinc-500" />
+            <div className="flex items-center justify-between gap-3">
+              <div className="flex items-center gap-3 min-w-0">
+                <div className="h-9 w-9 rounded-xl bg-zinc-100 flex items-center justify-center shrink-0">
+                  <ClipboardList className="h-4 w-4 text-zinc-500" />
+                </div>
+                <div className="min-w-0">
+                  <SheetTitle className="text-base font-semibold text-zinc-900">
+                    Ficha de Avaliação
+                  </SheetTitle>
+                  <SheetDescription className="text-[12px] text-zinc-500 mt-0.5 truncate">
+                    {fichaDetalhe?.avaliado.nomeCompleto} ·{' '}
+                    {fichaDetalhe?.periodo.nome}
+                  </SheetDescription>
+                </div>
               </div>
-              <div>
-                <SheetTitle className="text-base font-semibold text-zinc-900">
-                  Ficha de Avaliação
-                </SheetTitle>
-                <SheetDescription className="text-[12px] text-zinc-500 mt-0.5">
-                  {fichaDetalhe?.avaliado.nomeCompleto} ·{' '}
-                  {fichaDetalhe?.periodo.nome}
-                </SheetDescription>
-              </div>
+              {/* Botão download — apenas quando ValidadoPorDirector */}
+              {podeDownload && fichaDetalhe && (
+                <DownloadFichaBtn
+                  fichaId={fichaDetalhe.id}
+                  mecanografico={fichaDetalhe.avaliado.numeroMecanografico}
+                  periodoNome={fichaDetalhe.periodo.nome}
+                />
+              )}
             </div>
           </SheetHeader>
+
           <div className="flex-1 overflow-y-auto px-6 py-5 space-y-5">
             {loadingSheet ? (
               Array.from({ length: 4 }).map((_, i) => (
@@ -724,17 +771,17 @@ export default function FichasPage() {
                   </div>
                   {(() => {
                     const est = estadoConfig[fichaDetalhe.estado]
-                    return (
+                    return est ? (
                       <span
-                        className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-[11px] font-semibold border ${est?.class}`}
+                        className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-[11px] font-semibold border ${est.cls}`}
                       >
-                        {est?.label}
+                        {est.label}
                       </span>
-                    )
+                    ) : null
                   })()}
                 </div>
 
-                {/* Pontuação final */}
+                {/* Pontuação */}
                 {fichaDetalhe.pontuacaoFinal != null && (
                   <div className="rounded-xl bg-emerald-50 border border-emerald-200 p-4 flex items-center gap-4">
                     <div className="h-12 w-12 rounded-xl bg-emerald-100 flex items-center justify-center shrink-0">
@@ -759,108 +806,74 @@ export default function FichasPage() {
                   </div>
                 )}
 
-                {/* Submissões */}
+                {/* Avaliação do chefe — submissao singular */}
                 <div>
                   <p className="text-[10px] font-bold text-zinc-400 uppercase tracking-[0.12em] mb-3">
-                    Submissões ({fichaDetalhe.submissoes.length})
+                    Avaliação do chefe
                   </p>
-                  {fichaDetalhe.submissoes.length === 0 ? (
+                  {!fichaDetalhe.submissao ? (
                     <p className="text-sm text-zinc-400 text-center py-4">
-                      Sem submissões ainda.
+                      Sem avaliação submetida ainda.
                     </p>
                   ) : (
-                    <div className="space-y-3">
-                      {fichaDetalhe.submissoes.map((s) => (
-                        <div
-                          key={s.id}
-                          className="rounded-xl border border-zinc-200 p-4 bg-white"
-                        >
-                          <div className="flex items-center justify-between mb-2">
-                            <span className="text-xs font-semibold text-zinc-700 bg-zinc-100 px-2 py-0.5 rounded-md">
-                              {tipoLabel[s.tipo] ?? s.tipo}
-                            </span>
-                            <div className="flex items-center gap-2">
-                              {s.pontuacaoTotal != null && (
-                                <span className="text-sm font-bold text-zinc-900">
-                                  {s.pontuacaoTotal.toFixed(1)}
-                                  <span className="text-xs font-normal text-zinc-400">
-                                    {' '}
-                                    /5
-                                  </span>
-                                </span>
-                              )}
-                              <span className="text-[11px] text-zinc-400">
-                                {formatDate(s.dataSubmissao)}
+                    <div className="rounded-xl border border-zinc-200 p-4 bg-white space-y-3">
+                      <div className="flex items-center justify-between">
+                        <p className="text-xs text-zinc-500">
+                          Por:{' '}
+                          <span className="font-medium text-zinc-700">
+                            {fichaDetalhe.submissao.avaliador.nomeCompleto}
+                          </span>
+                        </p>
+                        <div className="flex items-center gap-2">
+                          {fichaDetalhe.submissao.pontuacaoTotal != null && (
+                            <span className="text-sm font-bold text-zinc-900">
+                              {fichaDetalhe.submissao.pontuacaoTotal.toFixed(1)}
+                              <span className="text-xs font-normal text-zinc-400">
+                                {' '}
+                                /5
                               </span>
-                            </div>
-                          </div>
-                          <p className="text-xs text-zinc-500 mb-3">
-                            Por:{' '}
-                            <span className="font-medium text-zinc-700">
-                              {s.avaliador.nomeCompleto}
                             </span>
-                          </p>
-                          {s.comentarios && (
-                            <p className="text-xs text-zinc-600 italic border-l-2 border-zinc-200 pl-2.5 mb-3">
-                              &quot;{s.comentarios}&ldquo;
-                            </p>
                           )}
-                          {s.respostas.length > 0 && (
-                            <div className="space-y-1.5 pt-1">
-                              {s.respostas.map((r) => (
-                                <div
-                                  key={r.id}
-                                  className="flex items-center justify-between text-xs"
-                                >
-                                  <span className="text-zinc-500 truncate max-w-[180px]">
-                                    {r.criterio.nome}
-                                  </span>
-                                  <div className="flex items-center gap-2 shrink-0">
-                                    <div className="flex gap-0.5">
-                                      {Array.from({ length: 5 }).map((_, i) => (
-                                        <div
-                                          key={i}
-                                          className={`h-1.5 w-4 rounded-full ${i < r.pontuacao ? 'bg-blue-500' : 'bg-zinc-200'}`}
-                                        />
-                                      ))}
-                                    </div>
-                                    <span className="text-zinc-600 font-semibold w-4 text-right">
-                                      {r.pontuacao}
-                                    </span>
-                                  </div>
-                                </div>
-                              ))}
-                            </div>
-                          )}
+                          <span className="text-[11px] text-zinc-400">
+                            {formatDate(fichaDetalhe.submissao.dataSubmissao)}
+                          </span>
                         </div>
-                      ))}
+                      </div>
+                      {fichaDetalhe.submissao.comentarios && (
+                        <p className="text-xs text-zinc-600 italic border-l-2 border-zinc-200 pl-2.5">
+                          "{fichaDetalhe.submissao.comentarios}"
+                        </p>
+                      )}
+                      {(fichaDetalhe.submissao.respostas ?? []).length > 0 && (
+                        <div className="space-y-1.5 pt-1">
+                          {fichaDetalhe.submissao.respostas.map((r) => (
+                            <div
+                              key={r.id}
+                              className="flex items-center justify-between text-xs"
+                            >
+                              <span className="text-zinc-500 truncate max-w-[180px]">
+                                {r.criterio.nome}
+                              </span>
+                              <div className="flex items-center gap-2 shrink-0">
+                                <div className="flex gap-0.5">
+                                  {Array.from({ length: 5 }).map((_, i) => (
+                                    <div
+                                      key={i}
+                                      className={`h-1.5 w-4 rounded-full ${i < r.pontuacao ? 'bg-blue-500' : 'bg-zinc-200'}`}
+                                    />
+                                  ))}
+                                </div>
+                                <span className="text-zinc-600 font-semibold w-4 text-right">
+                                  {r.pontuacao}
+                                </span>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      )}
                     </div>
                   )}
                 </div>
-
-                {/* Reavaliação */}
-                {fichaDetalhe.reavaliacao && (
-                  <div className="rounded-xl border border-amber-200 bg-amber-50 p-4">
-                    <div className="flex items-center justify-between mb-1.5">
-                      <p className="text-sm font-semibold text-amber-800">
-                        Reavaliador:{' '}
-                        {fichaDetalhe.reavaliacao.reavaliador.nomeCompleto}
-                      </p>
-                      <span
-                        className={`text-[11px] font-semibold px-2 py-0.5 rounded-full ${fichaDetalhe.reavaliacao.concluida ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-700'}`}
-                      >
-                        {fichaDetalhe.reavaliacao.concluida
-                          ? 'Concluída'
-                          : 'Pendente'}
-                      </span>
-                    </div>
-                    {fichaDetalhe.reavaliacao.motivacao && (
-                      <p className="text-xs text-amber-700 italic">
-                        &quot;{fichaDetalhe.reavaliacao.motivacao}&ldquo;
-                      </p>
-                    )}
-                  </div>
-                )}
 
                 {/* Validação */}
                 {fichaDetalhe.validacao && (
@@ -896,7 +909,7 @@ export default function FichasPage() {
                       <p
                         className={`text-xs mt-2 italic border-l-2 pl-2.5 ${fichaDetalhe.validacao.aprovado ? 'border-emerald-300 text-emerald-700' : 'border-red-300 text-red-700'}`}
                       >
-                        &quot;{fichaDetalhe.validacao.comentarios}&ldquo;
+                        "{fichaDetalhe.validacao.comentarios}"
                       </p>
                     )}
                   </div>

@@ -44,7 +44,6 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
 import { Button } from '@/components/ui/button'
-import { Separator } from '@/components/ui/separator'
 import { toast } from 'sonner'
 
 // ── Tipos ─────────────────────────────────────────────────────
@@ -61,13 +60,25 @@ interface Ficha {
     departamento?: { id: string; nome: string } | null
   }
   periodo: { id: string; nome: string; dataInicio: string; dataFim: string }
-  _count?: { submissoes: number }
+  submissao?: { pontuacaoTotal?: number | null } | null
   validacao?: { aprovado: boolean; dataValidacao: string } | null
 }
-interface FichaDetalhe extends Ficha {
-  submissoes: {
+interface FichaDetalhe {
+  id: string
+  estado: string
+  pontuacaoFinal?: number | null
+  createdAt: string
+  avaliado: {
     id: string
-    tipo: string
+    nomeCompleto: string
+    cargo: string
+    avatarUrl?: string
+    numeroMecanografico: string
+    departamento?: { id: string; nome: string } | null
+  }
+  periodo: { id: string; nome: string; dataInicio: string; dataFim: string }
+  submissao?: {
+    id: string
     comentarios?: string | null
     pontuacaoTotal?: number | null
     dataSubmissao: string
@@ -78,7 +89,7 @@ interface FichaDetalhe extends Ficha {
       observacao?: string | null
       criterio: { id: string; nome: string; peso: number }
     }[]
-  }[]
+  } | null
   validacao?: {
     aprovado: boolean
     comentarios?: string | null
@@ -109,6 +120,19 @@ function toArray<T>(res: unknown): T[] {
     return (res as any).data
   return []
 }
+async function safeFetch(url: string) {
+  try {
+    const res = await fetch(url, { credentials: 'include' })
+    if (!res.ok) {
+      console.error(`[safeFetch] ${url} → ${res.status}`)
+      return null
+    }
+    return res.json()
+  } catch (e) {
+    console.error(`[safeFetch]`, e)
+    return null
+  }
+}
 function getInitials(name: string) {
   return name
     .split(' ')
@@ -125,36 +149,19 @@ function formatDate(iso: string) {
   })
 }
 
-const estadoConfig: Record<string, { label: string; class: string }> = {
+const estadoConfig: Record<string, { label: string; cls: string }> = {
   Pendente: {
     label: 'Pendente',
-    class: 'bg-zinc-100 text-zinc-600 border-zinc-200',
-  },
-  AutoAvaliacao: {
-    label: 'Auto-avaliação',
-    class: 'bg-blue-50 text-blue-700 border-blue-200',
+    cls: 'bg-zinc-100 text-zinc-600 border-zinc-200',
   },
   AvaliadoPorChefe: {
     label: 'Av. p/ Chefe',
-    class: 'bg-purple-50 text-purple-700 border-purple-200',
-  },
-  EmReavaliacao: {
-    label: 'Em Reavaliação',
-    class: 'bg-amber-50 text-amber-700 border-amber-200',
-  },
-  Reavaliado: {
-    label: 'Reavaliado',
-    class: 'bg-orange-50 text-orange-700 border-orange-200',
+    cls: 'bg-purple-50 text-purple-700 border-purple-200',
   },
   ValidadoPorDirector: {
     label: 'Validado',
-    class: 'bg-emerald-50 text-emerald-700 border-emerald-200',
+    cls: 'bg-emerald-50 text-emerald-700 border-emerald-200',
   },
-}
-const tipoLabel: Record<string, string> = {
-  AutoAvaliacao: 'Auto-avaliação',
-  AvaliacaoChefe: 'Avaliação do Chefe',
-  Reavaliacao: 'Reavaliação',
 }
 
 function getSortValue(f: Ficha, key: SortKey): string | number {
@@ -216,8 +223,8 @@ function SortHeader({
   )
 }
 
-function PontuacaoBar({ valor, max = 5 }: { valor: number; max?: number }) {
-  const pct = Math.min(100, (valor / max) * 100)
+function PontuacaoBar({ valor }: { valor: number }) {
+  const pct = Math.min(100, (valor / 5) * 100)
   const cor =
     pct >= 80
       ? 'bg-emerald-500'
@@ -242,47 +249,34 @@ function PontuacaoBar({ valor, max = 5 }: { valor: number; max?: number }) {
 }
 
 // ── Export ────────────────────────────────────────────────────
-interface ExportCol<T> {
-  header: string
-  value: (r: T) => string
-  flex?: number
-}
-const EXPORT_COLS: ExportCol<Ficha>[] = [
-  { header: 'Funcionario', value: (r) => r.avaliado.nomeCompleto, flex: 2.2 },
-  { header: 'Cargo', value: (r) => r.avaliado.cargo, flex: 1.8 },
+const EXPORT_COLS = [
+  {
+    header: 'Funcionario',
+    value: (r: Ficha) => r.avaliado.nomeCompleto,
+    flex: 2.2,
+  },
+  { header: 'Cargo', value: (r: Ficha) => r.avaliado.cargo, flex: 1.8 },
   {
     header: 'Departamento',
-    value: (r) => r.avaliado.departamento?.nome ?? '-',
+    value: (r: Ficha) => r.avaliado.departamento?.nome ?? '-',
     flex: 1.8,
   },
-  { header: 'Periodo', value: (r) => r.periodo.nome, flex: 1.8 },
+  { header: 'Periodo', value: (r: Ficha) => r.periodo.nome, flex: 1.8 },
   {
     header: 'Estado',
-    value: (r) => estadoConfig[r.estado]?.label ?? r.estado,
+    value: (r: Ficha) => estadoConfig[r.estado]?.label ?? r.estado,
     flex: 1.5,
   },
   {
     header: 'Pontuacao',
-    value: (r) =>
+    value: (r: Ficha) =>
       r.pontuacaoFinal != null ? r.pontuacaoFinal.toFixed(2) : '-',
     flex: 1,
   },
-  { header: 'Data', value: (r) => formatDate(r.createdAt), flex: 1.2 },
+  { header: 'Data', value: (r: Ficha) => formatDate(r.createdAt), flex: 1.2 },
 ]
 
-function ExportBtn<T>({
-  data,
-  cols,
-  titulo,
-  filename,
-  disabled,
-}: {
-  data: T[]
-  cols: ExportCol<T>[]
-  titulo: string
-  filename: string
-  disabled?: boolean
-}) {
+function ExportBtn({ data, disabled }: { data: Ficha[]; disabled?: boolean }) {
   const [loadingPdf, setLoadingPdf] = useState(false)
   const [loadingXlsx, setLoadingXlsx] = useState(false)
   const isLoading = loadingPdf || loadingXlsx
@@ -293,7 +287,7 @@ function ExportBtn<T>({
     try {
       const rows = data.map((row) => {
         const obj: Record<string, string> = {}
-        for (const c of cols) obj[c.header] = c.value(row)
+        for (const c of EXPORT_COLS) obj[c.header] = c.value(row)
         return obj
       })
       const res = await fetch('/api/exportar/inline', {
@@ -302,9 +296,9 @@ function ExportBtn<T>({
         credentials: 'include',
         body: JSON.stringify({
           rows,
-          cols: cols.map(({ header, flex }) => ({ header, flex })),
-          titulo,
-          filename,
+          cols: EXPORT_COLS.map(({ header, flex }) => ({ header, flex })),
+          titulo: 'Historico de Avaliacoes',
+          filename: 'historico_avaliacoes',
           formato,
         }),
       })
@@ -317,7 +311,7 @@ function ExportBtn<T>({
       const url = URL.createObjectURL(blob),
         a = document.createElement('a')
       a.href = url
-      a.download = `${filename}_${new Date().toISOString().split('T')[0]}.${ext}`
+      a.download = `historico_avaliacoes_${new Date().toISOString().split('T')[0]}.${ext}`
       a.click()
       URL.revokeObjectURL(url)
       toast.success(formato === 'pdf' ? 'PDF gerado.' : 'Excel gerado.')
@@ -356,7 +350,7 @@ function ExportBtn<T>({
         <DropdownMenuItem
           onClick={handle('pdf')}
           disabled={loadingPdf}
-          className="gap-2.5 text-sm cursor-pointer rounded-lg"
+          className="gap-2.5 text-sm cursor-pointer"
         >
           {loadingPdf ? (
             <Loader2 className="h-4 w-4 animate-spin text-zinc-400" />
@@ -373,7 +367,7 @@ function ExportBtn<T>({
         <DropdownMenuItem
           onClick={handle('excel')}
           disabled={loadingXlsx}
-          className="gap-2.5 text-sm cursor-pointer rounded-lg"
+          className="gap-2.5 text-sm cursor-pointer"
         >
           {loadingXlsx ? (
             <Loader2 className="h-4 w-4 animate-spin text-zinc-400" />
@@ -387,6 +381,57 @@ function ExportBtn<T>({
         </DropdownMenuItem>
       </DropdownMenuContent>
     </DropdownMenu>
+  )
+}
+
+// ── Download ficha PDF ────────────────────────────────────────
+function DownloadFichaBtn({
+  fichaId,
+  mecanografico,
+  periodoNome,
+}: {
+  fichaId: string
+  mecanografico: string
+  periodoNome: string
+}) {
+  const [loading, setLoading] = useState(false)
+  const handleDownload = async () => {
+    setLoading(true)
+    try {
+      const res = await fetch(`/api/fichas/${fichaId}/pdf`, {
+        credentials: 'include',
+      })
+      if (!res.ok) {
+        toast.error('Não foi possível gerar o PDF.')
+        return
+      }
+      const blob = await res.blob()
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = `ficha-${mecanografico}-${periodoNome.replace(/\s+/g, '-')}.pdf`
+      a.click()
+      URL.revokeObjectURL(url)
+    } catch {
+      toast.error('Erro ao gerar o PDF.')
+    } finally {
+      setLoading(false)
+    }
+  }
+  return (
+    <button
+      type="button"
+      onClick={handleDownload}
+      disabled={loading}
+      className="flex items-center gap-1.5 text-xs font-semibold bg-zinc-950 hover:bg-zinc-800 text-white px-3 py-1.5 rounded-lg transition-colors disabled:opacity-50 shrink-0"
+    >
+      {loading ? (
+        <Loader2 className="h-3.5 w-3.5 animate-spin" />
+      ) : (
+        <Download className="h-3.5 w-3.5" />
+      )}
+      {loading ? 'A gerar...' : 'Baixar PDF'}
+    </button>
   )
 }
 
@@ -426,12 +471,9 @@ export default function HistoricoPage() {
       params.set('limit', '15')
       if (filtroEstado !== '_all') params.set('estado', filtroEstado)
       if (filtroPeriodo !== '_all') params.set('periodoId', filtroPeriodo)
-      const res = await fetch(`/api/fichas?${params}`, {
-        credentials: 'include',
-      })
-      const data = await res.json()
+      const data = await safeFetch(`/api/fichas?${params}`)
       setFichas(toArray<Ficha>(data))
-      if (data.meta) setMeta(data.meta)
+      if (data?.meta) setMeta(data.meta)
     } catch {
       toast.error('Não foi possível carregar o histórico.')
     } finally {
@@ -442,12 +484,11 @@ export default function HistoricoPage() {
   useEffect(() => {
     fetchFichas()
   }, [fetchFichas])
+
   useEffect(() => {
-    fetch('/api/periodos?limit=100', { credentials: 'include' })
-      .then((r) => r.json())
-      .then((d) => setPeriodos(toArray(d)))
-      .catch(() => {})
+    safeFetch('/api/periodos?limit=100').then((d) => setPeriodos(toArray(d)))
   }, [])
+
   useEffect(() => {
     const t = setTimeout(() => {
       setSearch(searchInput)
@@ -461,8 +502,8 @@ export default function HistoricoPage() {
     setFichaDetalhe(null)
     setLoadingSheet(true)
     try {
-      const res = await fetch(`/api/fichas/${f.id}`, { credentials: 'include' })
-      setFichaDetalhe(await res.json())
+      const data = await safeFetch(`/api/fichas/${f.id}`)
+      setFichaDetalhe(data)
     } catch {
       toast.error('Não foi possível carregar o detalhe.')
     } finally {
@@ -479,7 +520,6 @@ export default function HistoricoPage() {
     sort,
   )
 
-  // Mini stats
   const validadas = fichas.filter(
     (f) => f.estado === 'ValidadoPorDirector',
   ).length
@@ -489,6 +529,9 @@ export default function HistoricoPage() {
       ? comPontuacao.reduce((s, f) => s + (f.pontuacaoFinal ?? 0), 0) /
         comPontuacao.length
       : null
+
+  // Download disponível apenas para fichas validadas
+  const podeDownload = fichaDetalhe?.estado === 'ValidadoPorDirector'
 
   return (
     <div className="space-y-6">
@@ -501,13 +544,7 @@ export default function HistoricoPage() {
             {meta.total} avaliação{meta.total !== 1 ? 'ões' : ''} no registo
           </p>
         </div>
-        <ExportBtn
-          data={fichasFiltradas}
-          cols={EXPORT_COLS}
-          titulo="Historico de Avaliacoes"
-          filename="historico_avaliacoes"
-          disabled={loading}
-        />
+        <ExportBtn data={fichasFiltradas} disabled={loading} />
       </div>
 
       {/* Mini stats */}
@@ -682,13 +719,13 @@ export default function HistoricoPage() {
                 fichasFiltradas.map((f) => {
                   const est = estadoConfig[f.estado] ?? {
                     label: f.estado,
-                    class: 'bg-zinc-100 text-zinc-600 border-zinc-200',
+                    cls: 'bg-zinc-100 text-zinc-600 border-zinc-200',
                   }
                   return (
                     <tr
                       key={f.id}
                       onClick={() => abrirFicha(f)}
-                      className="group hover:bg-zinc-50/60 transition-colors duration-100 cursor-pointer"
+                      className="group hover:bg-zinc-50/60 transition-colors cursor-pointer"
                     >
                       <td className="px-4 py-3">
                         <div className="flex items-center gap-3">
@@ -715,7 +752,7 @@ export default function HistoricoPage() {
                       </td>
                       <td className="px-4 py-3">
                         <span
-                          className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-[11px] font-semibold border ${est.class}`}
+                          className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-[11px] font-semibold border ${est.cls}`}
                         >
                           {est.label}
                         </span>
@@ -776,21 +813,32 @@ export default function HistoricoPage() {
       <Sheet open={sheetOpen} onOpenChange={setSheetOpen}>
         <SheetContent className="w-full sm:max-w-lg flex flex-col gap-0 p-0 overflow-hidden">
           <SheetHeader className="px-6 py-5 border-b border-zinc-100 shrink-0">
-            <div className="flex items-center gap-3">
-              <div className="h-9 w-9 rounded-xl bg-zinc-100 flex items-center justify-center shrink-0">
-                <History className="h-4 w-4 text-zinc-500" />
+            <div className="flex items-center justify-between gap-3">
+              <div className="flex items-center gap-3 min-w-0">
+                <div className="h-9 w-9 rounded-xl bg-zinc-100 flex items-center justify-center shrink-0">
+                  <History className="h-4 w-4 text-zinc-500" />
+                </div>
+                <div className="min-w-0">
+                  <SheetTitle className="text-base font-semibold text-zinc-900">
+                    Detalhe da Avaliação
+                  </SheetTitle>
+                  <SheetDescription className="text-[12px] text-zinc-500 mt-0.5 truncate">
+                    {fichaDetalhe?.avaliado.nomeCompleto} ·{' '}
+                    {fichaDetalhe?.periodo.nome}
+                  </SheetDescription>
+                </div>
               </div>
-              <div>
-                <SheetTitle className="text-base font-semibold text-zinc-900">
-                  Detalhe da Avaliação
-                </SheetTitle>
-                <SheetDescription className="text-[12px] text-zinc-500 mt-0.5">
-                  {fichaDetalhe?.avaliado.nomeCompleto} ·{' '}
-                  {fichaDetalhe?.periodo.nome}
-                </SheetDescription>
-              </div>
+              {/* Botão download — só quando ValidadoPorDirector */}
+              {podeDownload && fichaDetalhe && (
+                <DownloadFichaBtn
+                  fichaId={fichaDetalhe.id}
+                  mecanografico={fichaDetalhe.avaliado.numeroMecanografico}
+                  periodoNome={fichaDetalhe.periodo.nome}
+                />
+              )}
             </div>
           </SheetHeader>
+
           <div className="flex-1 overflow-y-auto px-6 py-5 space-y-5">
             {loadingSheet ? (
               Array.from({ length: 4 }).map((_, i) => (
@@ -815,9 +863,9 @@ export default function HistoricoPage() {
                           Pontuação Final
                         </p>
                         <p className="text-xs text-emerald-600 mt-0.5">
-                          Validado ·{' '}
+                          Validado
                           {fichaDetalhe.validacao
-                            ? formatDate(fichaDetalhe.validacao.dataValidacao)
+                            ? ` · ${formatDate(fichaDetalhe.validacao.dataValidacao)}`
                             : ''}
                         </p>
                       </div>
@@ -826,77 +874,73 @@ export default function HistoricoPage() {
                   </div>
                 )}
 
-                {/* Submissões */}
+                {/* Avaliação do chefe — submissao singular */}
                 <div>
                   <p className="text-[10px] font-bold text-zinc-400 uppercase tracking-[0.12em] mb-3">
-                    Submissões ({fichaDetalhe.submissoes.length})
+                    Avaliação do chefe
                   </p>
-                  <div className="space-y-3">
-                    {fichaDetalhe.submissoes.map((s) => (
-                      <div
-                        key={s.id}
-                        className="rounded-xl border border-zinc-200 p-4 bg-white"
-                      >
-                        <div className="flex items-center justify-between mb-2">
-                          <span className="text-xs font-semibold text-zinc-700 bg-zinc-100 px-2 py-0.5 rounded-md">
-                            {tipoLabel[s.tipo] ?? s.tipo}
-                          </span>
-                          <div className="flex items-center gap-2">
-                            {s.pontuacaoTotal != null && (
-                              <span className="text-sm font-bold text-zinc-900">
-                                {s.pontuacaoTotal.toFixed(1)}
-                                <span className="text-xs font-normal text-zinc-400">
-                                  {' '}
-                                  /5
-                                </span>
-                              </span>
-                            )}
-                            <span className="text-[11px] text-zinc-400">
-                              {formatDate(s.dataSubmissao)}
-                            </span>
-                          </div>
-                        </div>
-                        <p className="text-xs text-zinc-500 mb-3">
+                  {!fichaDetalhe.submissao ? (
+                    <p className="text-sm text-zinc-400 text-center py-4">
+                      Sem avaliação submetida.
+                    </p>
+                  ) : (
+                    <div className="rounded-xl border border-zinc-200 p-4 bg-white space-y-3">
+                      <div className="flex items-center justify-between">
+                        <p className="text-xs text-zinc-500">
                           Por:{' '}
                           <span className="font-medium text-zinc-700">
-                            {s.avaliador.nomeCompleto}
+                            {fichaDetalhe.submissao.avaliador.nomeCompleto}
                           </span>
                         </p>
-                        {s.comentarios && (
-                          <p className="text-xs text-zinc-600 italic border-l-2 border-zinc-200 pl-2.5 mb-3">
-                            "{s.comentarios}"
-                          </p>
-                        )}
-                        {s.respostas.length > 0 && (
-                          <div className="space-y-1.5 pt-1">
-                            {s.respostas.map((r) => (
-                              <div
-                                key={r.id}
-                                className="flex items-center justify-between text-xs"
-                              >
-                                <span className="text-zinc-500 truncate max-w-[180px]">
-                                  {r.criterio.nome}
-                                </span>
-                                <div className="flex items-center gap-2 shrink-0">
-                                  <div className="flex gap-0.5">
-                                    {Array.from({ length: 5 }).map((_, i) => (
-                                      <div
-                                        key={i}
-                                        className={`h-1.5 w-4 rounded-full ${i < r.pontuacao ? 'bg-blue-500' : 'bg-zinc-200'}`}
-                                      />
-                                    ))}
-                                  </div>
-                                  <span className="text-zinc-600 font-semibold w-4 text-right">
-                                    {r.pontuacao}
-                                  </span>
-                                </div>
-                              </div>
-                            ))}
-                          </div>
-                        )}
+                        <div className="flex items-center gap-2">
+                          {fichaDetalhe.submissao.pontuacaoTotal != null && (
+                            <span className="text-sm font-bold text-zinc-900">
+                              {fichaDetalhe.submissao.pontuacaoTotal.toFixed(1)}
+                              <span className="text-xs font-normal text-zinc-400">
+                                {' '}
+                                /5
+                              </span>
+                            </span>
+                          )}
+                          <span className="text-[11px] text-zinc-400">
+                            {formatDate(fichaDetalhe.submissao.dataSubmissao)}
+                          </span>
+                        </div>
                       </div>
-                    ))}
-                  </div>
+                      {fichaDetalhe.submissao.comentarios && (
+                        <p className="text-xs text-zinc-600 italic border-l-2 border-zinc-200 pl-2.5">
+                          "{fichaDetalhe.submissao.comentarios}"
+                        </p>
+                      )}
+                      {(fichaDetalhe.submissao.respostas ?? []).length > 0 && (
+                        <div className="space-y-1.5 pt-1">
+                          {fichaDetalhe.submissao.respostas.map((r) => (
+                            <div
+                              key={r.id}
+                              className="flex items-center justify-between text-xs"
+                            >
+                              <span className="text-zinc-500 truncate max-w-[180px]">
+                                {r.criterio.nome}
+                              </span>
+                              <div className="flex items-center gap-2 shrink-0">
+                                <div className="flex gap-0.5">
+                                  {Array.from({ length: 5 }).map((_, i) => (
+                                    <div
+                                      key={i}
+                                      className={`h-1.5 w-4 rounded-full ${i < r.pontuacao ? 'bg-blue-500' : 'bg-zinc-200'}`}
+                                    />
+                                  ))}
+                                </div>
+                                <span className="text-zinc-600 font-semibold w-4 text-right">
+                                  {r.pontuacao}
+                                </span>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  )}
                 </div>
 
                 {/* Validação */}

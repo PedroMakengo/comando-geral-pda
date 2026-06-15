@@ -34,9 +34,9 @@ export async function GET(req: NextRequest, { params }: Params) {
             },
           },
           periodo: { select: { id: true, nome: true } },
-          submissoes: {
+          // submissao singular
+          submissao: {
             select: {
-              tipo: true,
               pontuacaoTotal: true,
               dataSubmissao: true,
               avaliador: { select: { id: true, nomeCompleto: true } },
@@ -58,7 +58,8 @@ export async function GET(req: NextRequest, { params }: Params) {
 }
 
 // ── DELETE /api/validacoes/[id] ───────────────────────────────
-// Apenas Master — permite reverter uma validação incorrecta
+// Apenas Master — reverte uma validação incorrecta.
+// A ficha volta a AvaliadoPorChefe para o Director validar novamente.
 export async function DELETE(req: NextRequest, { params }: Params) {
   const auth = requireRole(req, ['Master'])
   if (auth instanceof NextResponse) return auth
@@ -76,19 +77,10 @@ export async function DELETE(req: NextRequest, { params }: Params) {
   await prisma.$transaction(async (tx) => {
     await tx.validacaoDirector.delete({ where: { id } })
 
-    // Reverter estado da ficha para Reavaliado (se tinha reavaliação) ou AvaliadoPorChefe
-    const ficha = await tx.fichaAvaliacao.findUnique({
-      where: { id: validacao.fichaId },
-      include: { reavaliacao: true },
-    })
-
-    const estadoAnterior = ficha?.reavaliacao?.concluida
-      ? 'Reavaliado'
-      : 'AvaliadoPorChefe'
-
+    // Reverter ficha para AvaliadoPorChefe — submissão ainda existe
     await tx.fichaAvaliacao.update({
       where: { id: validacao.fichaId },
-      data: { estado: estadoAnterior as any, pontuacaoFinal: null },
+      data: { estado: 'AvaliadoPorChefe', pontuacaoFinal: null },
     })
   })
 

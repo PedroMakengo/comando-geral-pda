@@ -1,166 +1,318 @@
-import {
-  PrismaClient,
-  Role,
-  Estado,
-  EstadoAvaliacao,
-  TipoAvaliacao,
-} from '@prisma/client'
+// prisma/seed.ts
+import { PrismaClient } from '@prisma/client'
 import bcrypt from 'bcryptjs'
 
 const prisma = new PrismaClient()
 
 async function main() {
-  console.log('\n🗑️  LIMPANDO BASE DE DADOS...\n')
+  console.log('🌱 A iniciar seed...')
 
-  // ════════════════════════════════════════════════════════════════════════════
-  // 1. LIMPAR DADOS EXISTENTES (ORDEM CORRETA PARA EVITAR CONSTRAINTS)
-  // ════════════════════════════════════════════════════════════════════════════
-  console.log('📌 Removendo dados existentes...')
-
-  // Remover respostas de critérios
-  await prisma.criterioResposta.deleteMany()
-  console.log('   ✓ Respostas de critérios removidas')
-
-  // Remover reavaliações indicadas
-  await prisma.reavaliacaoIndicada.deleteMany()
-  console.log('   ✓ Reavaliações indicadas removidas')
-
-  // Remover validações de diretor
+  // ── Limpar dados existentes ───────────────────────────────
   await prisma.validacaoDirector.deleteMany()
-  console.log('   ✓ Validações de diretor removidas')
-
-  // Remover submissões de avaliação
+  await prisma.criterioResposta.deleteMany()
   await prisma.submissaoAvaliacao.deleteMany()
-  console.log('   ✓ Submissões de avaliação removidas')
-
-  // Remover fichas de avaliação
   await prisma.fichaAvaliacao.deleteMany()
-  console.log('   ✓ Fichas de avaliação removidas')
-
-  // Remover períodos de avaliação
-  await prisma.periodoAvaliacao.deleteMany()
-  console.log('   ✓ Períodos de avaliação removidos')
-
-  // Remover associações critério-departamento
-  await prisma.criterioDepartamento.deleteMany()
-  console.log('   ✓ Associações critério-departamento removidas')
-
-  // Remover critérios
   await prisma.criterio.deleteMany()
-  console.log('   ✓ Critérios removidos')
-
-  // Remover chefes dos departamentos
-  await prisma.departamento.updateMany({
-    data: { chefeId: null },
-  })
-  console.log('   ✓ Referências de chefes removidas')
-
-  // Remover departamentos
-  await prisma.departamento.deleteMany()
-  console.log('   ✓ Departamentos removidos')
-
-  // Remover direções
-  await prisma.direcao.deleteMany()
-  console.log('   ✓ Direções removidas')
-
-  // Remover pelouros
-  await prisma.pelouro.deleteMany()
-  console.log('   ✓ Pelouros removidos')
-
-  // Remover TODOS os utilizadores (incluindo qualquer Master existente)
+  await prisma.periodoAvaliacao.deleteMany()
   await prisma.utilizador.deleteMany()
-  console.log('   ✓ TODOS os utilizadores removidos')
+  await prisma.departamento.deleteMany()
+  await prisma.direcao.deleteMany()
+  await prisma.pelouro.deleteMany()
 
-  console.log('\n✅ Base de dados completamente limpa!\n')
+  console.log('✓ Dados anteriores limpos')
 
-  // ════════════════════════════════════════════════════════════════════════════
-  // 2. CRIAR APENAS O USUÁRIO MASTER
-  // ════════════════════════════════════════════════════════════════════════════
-  console.log('📌 Criando usuário Master...\n')
+  // ── Passwords ─────────────────────────────────────────────
+  const hash = (p: string) => bcrypt.hashSync(p, 12)
 
-  const passwordHash = await bcrypt.hash('Admin@1234', 12)
+  // ── Estrutura organizacional ──────────────────────────────
+  const pelouro = await prisma.pelouro.create({
+    data: { nome: 'Pelouro das Finanças e Administração' },
+  })
 
-  const masterUser = await prisma.utilizador.create({
+  const direcao = await prisma.direcao.create({
+    data: { nome: 'Direcção de Recursos Humanos', pelouroId: pelouro.id },
+  })
+
+  const departamento = await prisma.departamento.create({
     data: {
-      nomeCompleto: 'Administrador Master',
-      email: 'master@empresa.ao',
-      numeroMecanografico: 'MEC-0001',
-      cargo: 'Administrador do Sistema',
-      role: Role.Master,
-      passwordHash: passwordHash,
-      avatarUrl: '',
-      estado: Estado.Activo,
-      pelouroId: null,
-      direcaoId: null,
-      departamentoId: null,
+      nome: 'Departamento de Formação',
+      direcaoId: direcao.id,
     },
   })
 
-  console.log(`✅ Usuário Master criado com sucesso!`)
-  console.log(`   ID: ${masterUser.id}`)
-  console.log(`   Nome: ${masterUser.nomeCompleto}`)
-  console.log(`   Email: ${masterUser.email}`)
-  console.log(`   Role: ${masterUser.role}`)
+  console.log('✓ Estrutura organizacional criada')
 
-  // ════════════════════════════════════════════════════════════════════════════
-  // 3. VERIFICAR SE EXISTE APENAS 1 USUÁRIO
-  // ════════════════════════════════════════════════════════════════════════════
-  const totalUsers = await prisma.utilizador.count()
+  // ── 1 Master ──────────────────────────────────────────────
+  const master = await prisma.utilizador.create({
+    data: {
+      nomeCompleto: 'Administrador do Sistema',
+      email: 'master@adapec.ao',
+      passwordHash: hash('Master@2025'),
+      numeroMecanografico: 'MEC-0000',
+      cargo: 'Administrador',
+      role: 'Master',
+      estado: 'Activo',
+      avatarUrl: '',
+    },
+  })
 
-  console.log('\n📊 VERIFICAÇÃO:')
-  console.log(`   Total de utilizadores na base de dados: ${totalUsers}`)
+  // ── 1 Director ────────────────────────────────────────────
+  const director = await prisma.utilizador.create({
+    data: {
+      nomeCompleto: 'António Manuel Sebastião',
+      email: 'director@adapec.ao',
+      passwordHash: hash('Director@2025'),
+      numeroMecanografico: 'MEC-0001',
+      cargo: 'Director de Recursos Humanos',
+      role: 'Director',
+      estado: 'Activo',
+      avatarUrl: '',
+      direcaoId: direcao.id,
+    },
+  })
 
-  if (totalUsers === 1) {
-    console.log('   ✅ Apenas 1 usuário existe (conforme solicitado)')
-  } else {
-    console.log(`   ⚠️ Existem ${totalUsers} usuários (era esperado apenas 1)`)
+  // ── 1 Chefe de Departamento ───────────────────────────────
+  const chefe = await prisma.utilizador.create({
+    data: {
+      nomeCompleto: 'Maria da Conceição Ferreira',
+      email: 'chefe@adapec.ao',
+      passwordHash: hash('Chefe@2025'),
+      numeroMecanografico: 'MEC-0002',
+      cargo: 'Chefe do Departamento de Formação',
+      role: 'ChefeDepartamento',
+      estado: 'Activo',
+      avatarUrl: '',
+      direcaoId: direcao.id,
+      departamentoId: departamento.id,
+    },
+  })
+
+  // Associar chefe ao departamento
+  await prisma.departamento.update({
+    where: { id: departamento.id },
+    data: { chefeId: chefe.id },
+  })
+
+  // ── 3 Técnicos ────────────────────────────────────────────
+  const tecnicosData = [
+    {
+      nomeCompleto: 'Carlos Alberto Lopes',
+      email: 'carlos.lopes@adapec.ao',
+      numeroMecanografico: 'MEC-0003',
+      cargo: 'Técnico de Formação',
+    },
+    {
+      nomeCompleto: 'Filomena Rosa Domingos',
+      email: 'filomena.domingos@adapec.ao',
+      numeroMecanografico: 'MEC-0004',
+      cargo: 'Técnica de Recursos Humanos',
+    },
+    {
+      nomeCompleto: 'Joaquim Paulo Teixeira',
+      email: 'joaquim.teixeira@adapec.ao',
+      numeroMecanografico: 'MEC-0005',
+      cargo: 'Técnico Administrativo',
+    },
+  ]
+
+  const tecnicos: Awaited<ReturnType<typeof prisma.utilizador.create>>[] = []
+  for (const t of tecnicosData) {
+    const tecnico = await prisma.utilizador.create({
+      data: {
+        ...t,
+        passwordHash: hash('Tecnico@2025'),
+        role: 'Tecnico',
+        estado: 'Activo',
+        avatarUrl: '',
+        direcaoId: direcao.id,
+        departamentoId: departamento.id,
+      },
+    })
+    tecnicos.push(tecnico)
   }
 
-  // ════════════════════════════════════════════════════════════════════════════
-  // 4. RESUMO FINAL
-  // ════════════════════════════════════════════════════════════════════════════
   console.log(
-    '\n════════════════════════════════════════════════════════════════════',
-  )
-  console.log('🎉 LIMPEZA FINALIZADA COM SUCESSO!')
-  console.log(
-    '════════════════════════════════════════════════════════════════════\n',
+    '✓ Utilizadores criados: 1 Master, 1 Director, 1 Chefe, 3 Técnicos',
   )
 
-  console.log('📊 RESUMO DA OPERAÇÃO:')
-  console.log('   ❌ Todos os pelouros removidos')
-  console.log('   ❌ Todas as direções removidas')
-  console.log('   ❌ Todos os departamentos removidos')
-  console.log('   ❌ Todos os critérios removidos')
-  console.log('   ❌ Todos os períodos de avaliação removidos')
-  console.log('   ❌ Todas as fichas de avaliação removidas')
-  console.log('   ❌ Todas as avaliações/submissões removidas')
-  console.log(
-    '   ❌ TODOS os utilizadores removidos (incluindo Masters antigos)\n',
-  )
+  // ── Critérios de avaliação ────────────────────────────────
+  const criteriosData: { nome: string; peso: number; descricao: string }[] = [
+    {
+      nome: 'Qualidade do Trabalho',
+      peso: 3,
+      descricao: 'Precisão, rigor e qualidade dos resultados produzidos.',
+    },
+    {
+      nome: 'Cumprimento de Prazos',
+      peso: 2,
+      descricao:
+        'Capacidade de entregar tarefas dentro dos prazos estabelecidos.',
+    },
+    {
+      nome: 'Trabalho em Equipa',
+      peso: 2,
+      descricao: 'Colaboração, comunicação e espírito de equipa.',
+    },
+    {
+      nome: 'Iniciativa e Proactividade',
+      peso: 2,
+      descricao: 'Capacidade de agir sem necessidade de supervisão constante.',
+    },
+    {
+      nome: 'Assiduidade e Pontualidade',
+      peso: 1,
+      descricao: 'Presença regular e cumprimento dos horários.',
+    },
+  ]
 
-  console.log('   ✅ Apenas 1 usuário foi criado (o novo Master)\n')
+  const criterios: Awaited<ReturnType<typeof prisma.criterio.create>>[] = []
+  for (const c of criteriosData) {
+    const criterio = await prisma.criterio.create({
+      data: {
+        nome: c.nome,
+        peso: c.peso,
+        descricao: c.descricao,
+        departamentos: {
+          create: [{ departamentoId: departamento.id }],
+        },
+      },
+    })
+    criterios.push(criterio)
+  }
 
-  console.log('🔑 CREDENCIAIS DO ÚNICO USUÁRIO (MASTER):')
-  console.log('   📧 Email: master@empresa.ao')
-  console.log('   🔒 Senha: Admin@1234')
-  console.log(`   👤 Role: ${Role.Master}\n`)
+  console.log(`✓ ${criterios.length} critérios criados`)
 
-  console.log('📋 PRÓXIMOS PASSOS:')
-  console.log('   1. Faça login com o usuário Master')
-  console.log('   2. Crie novos Pelouros, Direções e Departamentos')
-  console.log('   3. Cadastre novos funcionários')
-  console.log('   4. Configure os critérios de avaliação')
-  console.log('   5. Crie períodos de avaliação')
-  console.log('   6. Inicie o processo de avaliação de desempenho')
-  console.log(
-    '════════════════════════════════════════════════════════════════════\n',
-  )
+  // ── Período de avaliação activo ───────────────────────────
+  const periodo = await prisma.periodoAvaliacao.create({
+    data: {
+      nome: 'Avaliação de Desempenho 2025',
+      dataInicio: new Date('2025-01-01'),
+      dataFim: new Date('2025-12-31'),
+      activo: true,
+    },
+  })
+
+  console.log('✓ Período de avaliação criado')
+
+  // ── Fichas para os 3 técnicos ─────────────────────────────
+  // Técnico 0: ValidadoPorDirector (com avaliação completa)
+  // Técnico 1: AvaliadoPorChefe (aguarda validação)
+  // Técnico 2: Pendente
+
+  // Técnico 0 — ficha completa e validada
+  const ficha0 = await prisma.fichaAvaliacao.create({
+    data: {
+      avaliadoId: tecnicos[0].id,
+      periodoId: periodo.id,
+      estado: 'ValidadoPorDirector',
+    },
+  })
+
+  const respostas0 = criterios.map((c, i) => ({
+    criterioId: c.id,
+    pontuacao: [5, 4, 4, 3, 5][i] ?? 4,
+  }))
+  const pontuacao0 =
+    respostas0.reduce((sum, r) => {
+      const peso =
+        criteriosData[criterios.findIndex((c) => c.id === r.criterioId)]
+          ?.peso ?? 1
+      return sum + r.pontuacao * peso
+    }, 0) / criteriosData.reduce((s, c) => s + c.peso, 0)
+
+  const submissao0 = await prisma.submissaoAvaliacao.create({
+    data: {
+      fichaId: ficha0.id,
+      avaliadorId: chefe.id,
+      pontuacaoTotal: Math.round(pontuacao0 * 100) / 100,
+      comentarios: 'Excelente desempenho. Técnico muito dedicado e proactivo.',
+      respostas: {
+        create: respostas0.map((r) => ({
+          criterioId: r.criterioId,
+          pontuacao: r.pontuacao,
+        })),
+      },
+    },
+  })
+
+  await prisma.validacaoDirector.create({
+    data: {
+      fichaId: ficha0.id,
+      directorId: director.id,
+      aprovado: true,
+      comentarios: 'Avaliação validada. Excelente trabalho.',
+    },
+  })
+
+  await prisma.fichaAvaliacao.update({
+    where: { id: ficha0.id },
+    data: { pontuacaoFinal: submissao0.pontuacaoTotal },
+  })
+
+  // Técnico 1 — avaliado pelo chefe, aguarda director
+  const ficha1 = await prisma.fichaAvaliacao.create({
+    data: {
+      avaliadoId: tecnicos[1].id,
+      periodoId: periodo.id,
+      estado: 'AvaliadoPorChefe',
+    },
+  })
+
+  const respostas1 = criterios.map((c, i) => ({
+    criterioId: c.id,
+    pontuacao: [3, 3, 4, 3, 4][i] ?? 3,
+  }))
+  const pontuacao1 =
+    respostas1.reduce((sum, r) => {
+      const peso =
+        criteriosData[criterios.findIndex((c) => c.id === r.criterioId)]
+          ?.peso ?? 1
+      return sum + r.pontuacao * peso
+    }, 0) / criteriosData.reduce((s, c) => s + c.peso, 0)
+
+  await prisma.submissaoAvaliacao.create({
+    data: {
+      fichaId: ficha1.id,
+      avaliadorId: chefe.id,
+      pontuacaoTotal: Math.round(pontuacao1 * 100) / 100,
+      comentarios: 'Desempenho satisfatório. Pode melhorar na proactividade.',
+      respostas: {
+        create: respostas1.map((r) => ({
+          criterioId: r.criterioId,
+          pontuacao: r.pontuacao,
+        })),
+      },
+    },
+  })
+
+  // Técnico 2 — pendente (sem avaliação ainda)
+  await prisma.fichaAvaliacao.create({
+    data: {
+      avaliadoId: tecnicos[2].id,
+      periodoId: periodo.id,
+      estado: 'Pendente',
+    },
+  })
+
+  console.log('✓ Fichas de avaliação criadas')
+  console.log('')
+  console.log('═══════════════════════════════════════════')
+  console.log('  Seed concluído com sucesso!')
+  console.log('═══════════════════════════════════════════')
+  console.log('')
+  console.log('  Credenciais de acesso:')
+  console.log(`  Master   → master@adapec.ao       / Master@2025`)
+  console.log(`  Director → director@adapec.ao     / Director@2025`)
+  console.log(`  Chefe    → chefe@adapec.ao         / Chefe@2025`)
+  console.log(`  Técnicos → carlos.lopes@adapec.ao  / Tecnico@2025`)
+  console.log(`             filomena.domingos@...   / Tecnico@2025`)
+  console.log(`             joaquim.teixeira@...    / Tecnico@2025`)
+  console.log('═══════════════════════════════════════════')
 }
 
 main()
   .catch((e) => {
-    console.error('❌ Erro durante a limpeza:', e)
+    console.error(e)
     process.exit(1)
   })
   .finally(async () => {

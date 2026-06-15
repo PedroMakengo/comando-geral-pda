@@ -10,6 +10,7 @@ import {
   FileText,
   CheckCircle2,
   ClipboardList,
+  Download,
 } from 'lucide-react'
 import { Card, CardContent } from '@/components/ui/card'
 import {
@@ -19,7 +20,6 @@ import {
   SheetTitle,
   SheetDescription,
 } from '@/components/ui/sheet'
-import { Separator } from '@/components/ui/separator'
 import { toast } from 'sonner'
 
 // ── Tipos ─────────────────────────────────────────────────────
@@ -27,19 +27,33 @@ interface AuthUser {
   id: string
   nomeCompleto: string
 }
+
 interface Ficha {
   id: string
   estado: string
   pontuacaoFinal?: number | null
   createdAt: string
   periodo: { id: string; nome: string; dataInicio: string; dataFim: string }
-  _count?: { submissoes: number }
+  // submissao singular — pode não vir na listagem dependendo do select
+  submissao?: { pontuacaoTotal?: number | null } | null
   validacao?: { aprovado: boolean; dataValidacao: string } | null
 }
-interface FichaDetalhe extends Ficha {
-  submissoes: {
+
+interface FichaDetalhe {
+  id: string
+  estado: string
+  pontuacaoFinal?: number | null
+  createdAt: string
+  periodo: { id: string; nome: string; dataInicio: string; dataFim: string }
+  avaliado: {
     id: string
-    tipo: string
+    nomeCompleto: string
+    cargo: string
+    numeroMecanografico: string
+  }
+  // submissao singular (schema novo)
+  submissao?: {
+    id: string
     comentarios?: string | null
     pontuacaoTotal?: number | null
     dataSubmissao: string
@@ -50,10 +64,6 @@ interface FichaDetalhe extends Ficha {
       observacao?: string | null
       criterio: { id: string; nome: string; peso: number }
     }[]
-  }[]
-  reavaliacao?: {
-    concluida: boolean
-    reavaliador: { nomeCompleto: string }
   } | null
   validacao?: {
     aprovado: boolean
@@ -62,13 +72,14 @@ interface FichaDetalhe extends Ficha {
     director: { nomeCompleto: string }
   } | null
 }
+
 interface Meta {
   total: number
   page: number
   limit: number
   totalPages: number
 }
-type SortKey = 'periodo' | 'estado' | 'submissoes' | 'pontuacao' | 'data'
+type SortKey = 'periodo' | 'estado' | 'pontuacao' | 'data'
 interface SortState {
   key: SortKey | null
   direction: 'asc' | 'desc'
@@ -89,44 +100,24 @@ function formatDate(iso: string) {
   })
 }
 
-const estadoConfig: Record<string, { label: string; class: string }> = {
+const estadoConfig: Record<string, { label: string; cls: string }> = {
   Pendente: {
     label: 'Pendente',
-    class: 'bg-zinc-100 text-zinc-600 border-zinc-200',
-  },
-  AutoAvaliacao: {
-    label: 'Auto-avaliação',
-    class: 'bg-blue-50 text-blue-700 border-blue-200',
+    cls: 'bg-zinc-100 text-zinc-600 border-zinc-200',
   },
   AvaliadoPorChefe: {
     label: 'Av. p/ Chefe',
-    class: 'bg-purple-50 text-purple-700 border-purple-200',
-  },
-  EmReavaliacao: {
-    label: 'Em Reavaliação',
-    class: 'bg-amber-50 text-amber-700 border-amber-200',
-  },
-  Reavaliado: {
-    label: 'Reavaliado',
-    class: 'bg-orange-50 text-orange-700 border-orange-200',
+    cls: 'bg-purple-50 text-purple-700 border-purple-200',
   },
   ValidadoPorDirector: {
     label: 'Validado',
-    class: 'bg-emerald-50 text-emerald-700 border-emerald-200',
+    cls: 'bg-emerald-50 text-emerald-700 border-emerald-200',
   },
-}
-const tipoLabel: Record<string, string> = {
-  AutoAvaliacao: 'Auto-avaliação',
-  AvaliacaoChefe: 'Avaliação do Chefe',
-  Reavaliacao: 'Reavaliação',
 }
 const estadoOrder: Record<string, number> = {
   Pendente: 0,
-  AutoAvaliacao: 1,
-  AvaliadoPorChefe: 2,
-  EmReavaliacao: 3,
-  Reavaliado: 4,
-  ValidadoPorDirector: 5,
+  AvaliadoPorChefe: 1,
+  ValidadoPorDirector: 2,
 }
 
 function PontuacaoBar({ valor }: { valor: number }) {
@@ -185,14 +176,13 @@ function SortHeader({
     </th>
   )
 }
+
 function getSortValue(f: Ficha, key: SortKey): string | number {
   switch (key) {
     case 'periodo':
       return f.periodo.nome
     case 'estado':
       return estadoOrder[f.estado] ?? 99
-    case 'submissoes':
-      return f._count?.submissoes ?? 0
     case 'pontuacao':
       return f.pontuacaoFinal ?? -1
     case 'data':
@@ -214,7 +204,56 @@ function sortFichas(list: Ficha[], sort: SortState): Ficha[] {
   })
 }
 
-// ── Componente partilhado (Fichas + Histórico) ────────────────
+// ── Botão download PDF ────────────────────────────────────────
+function DownloadButton({
+  fichaId,
+  mecanografico,
+  periodoNome,
+}: {
+  fichaId: string
+  mecanografico: string
+  periodoNome: string
+}) {
+  const [loading, setLoading] = useState(false)
+
+  const handleDownload = async () => {
+    setLoading(true)
+    try {
+      const res = await fetch(`/api/fichas/${fichaId}/pdf`, {
+        credentials: 'include',
+      })
+      if (!res.ok) {
+        toast.error('Não foi possível gerar o PDF.')
+        return
+      }
+      const blob = await res.blob()
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = `ficha-${mecanografico}-${periodoNome.replace(/\s+/g, '-')}.pdf`
+      a.click()
+      URL.revokeObjectURL(url)
+    } catch {
+      toast.error('Erro ao gerar o ficheiro.')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  return (
+    <button
+      type="button"
+      onClick={handleDownload}
+      disabled={loading}
+      className="flex items-center gap-1.5 text-xs font-semibold bg-zinc-950 hover:bg-zinc-800 text-white px-3 py-1.5 rounded-lg transition-colors disabled:opacity-50"
+    >
+      <Download className="h-3.5 w-3.5" />
+      {loading ? 'A preparar...' : 'Baixar ficha PDF'}
+    </button>
+  )
+}
+
+// ── Componente principal ──────────────────────────────────────
 export function FichasBase({ modo }: { modo: 'fichas' | 'historico' }) {
   const [user, setUser] = useState<AuthUser | null>(null)
   const [fichas, setFichas] = useState<Ficha[]>([])
@@ -247,6 +286,7 @@ export function FichasBase({ modo }: { modo: 'fichas' | 'historico' }) {
     params.set('page', String(page))
     params.set('limit', '10')
     if (modo === 'historico') params.set('estado', 'ValidadoPorDirector')
+
     fetch(`/api/fichas?${params}`, { credentials: 'include' })
       .then((r) => r.json())
       .then((data) => {
@@ -269,11 +309,10 @@ export function FichasBase({ modo }: { modo: 'fichas' | 'historico' }) {
     setFichaDetalhe(null)
     setLoadingSheet(true)
     try {
-      setFichaDetalhe(
-        await fetch(`/api/fichas/${f.id}`, { credentials: 'include' }).then(
-          (r) => r.json(),
-        ),
-      )
+      const data = await fetch(`/api/fichas/${f.id}`, {
+        credentials: 'include',
+      }).then((r) => r.json())
+      setFichaDetalhe(data)
     } catch {
       toast.error('Não foi possível carregar o detalhe.')
     } finally {
@@ -283,7 +322,6 @@ export function FichasBase({ modo }: { modo: 'fichas' | 'historico' }) {
 
   const fichasOrdenadas = sortFichas(fichas, sort)
 
-  // Mini stats (só fichas, não historico)
   const validadas = fichas.filter(
     (f) => f.estado === 'ValidadoPorDirector',
   ).length
@@ -372,8 +410,8 @@ export function FichasBase({ modo }: { modo: 'fichas' | 'historico' }) {
                   onSort={handleSort}
                 />
                 <SortHeader
-                  label={modo === 'historico' ? 'Pontuação' : 'Submissões'}
-                  sortKey={modo === 'historico' ? 'pontuacao' : 'submissoes'}
+                  label="Pontuação"
+                  sortKey="pontuacao"
                   sort={sort}
                   onSort={handleSort}
                 />
@@ -418,13 +456,13 @@ export function FichasBase({ modo }: { modo: 'fichas' | 'historico' }) {
                 fichasOrdenadas.map((f) => {
                   const est = estadoConfig[f.estado] ?? {
                     label: f.estado,
-                    class: 'bg-zinc-100 text-zinc-600 border-zinc-200',
+                    cls: 'bg-zinc-100 text-zinc-600 border-zinc-200',
                   }
                   return (
                     <tr
                       key={f.id}
                       onClick={() => abrirFicha(f)}
-                      className="group hover:bg-zinc-50/60 transition-colors duration-100 cursor-pointer"
+                      className="group hover:bg-zinc-50/60 transition-colors cursor-pointer"
                     >
                       <td className="px-4 py-3">
                         <p className="font-semibold text-zinc-900 leading-tight">
@@ -437,24 +475,16 @@ export function FichasBase({ modo }: { modo: 'fichas' | 'historico' }) {
                       </td>
                       <td className="px-4 py-3">
                         <span
-                          className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-[11px] font-semibold border ${est.class}`}
+                          className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-[11px] font-semibold border ${est.cls}`}
                         >
                           {est.label}
                         </span>
                       </td>
                       <td className="px-4 py-3 min-w-[120px]">
-                        {modo === 'historico' ? (
-                          f.pontuacaoFinal != null ? (
-                            <PontuacaoBar valor={f.pontuacaoFinal} />
-                          ) : (
-                            <span className="text-zinc-300 text-xs">—</span>
-                          )
+                        {f.pontuacaoFinal != null ? (
+                          <PontuacaoBar valor={f.pontuacaoFinal} />
                         ) : (
-                          <span
-                            className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[11px] font-semibold ${(f._count?.submissoes ?? 0) > 0 ? 'bg-blue-50 text-blue-700 border border-blue-200' : 'bg-zinc-50 text-zinc-400 border border-zinc-100'}`}
-                          >
-                            {f._count?.submissoes ?? 0}
-                          </span>
+                          <span className="text-zinc-300 text-xs">—</span>
                         )}
                       </td>
                       <td className="px-4 py-3 text-[12px] text-zinc-400">
@@ -470,6 +500,8 @@ export function FichasBase({ modo }: { modo: 'fichas' | 'historico' }) {
             </tbody>
           </table>
         </div>
+
+        {/* Paginação */}
         {meta.totalPages > 1 && (
           <div className="flex items-center justify-between px-4 py-3 border-t border-zinc-100 bg-zinc-50/50">
             <p className="text-xs text-zinc-400">
@@ -506,20 +538,33 @@ export function FichasBase({ modo }: { modo: 'fichas' | 'historico' }) {
       <Sheet open={sheetOpen} onOpenChange={setSheetOpen}>
         <SheetContent className="w-full sm:max-w-lg flex flex-col gap-0 p-0 overflow-hidden">
           <SheetHeader className="px-6 py-5 border-b border-zinc-100 shrink-0">
-            <div className="flex items-center gap-3">
-              <div className="h-9 w-9 rounded-xl bg-zinc-100 flex items-center justify-center shrink-0">
-                <FileText className="h-4 w-4 text-zinc-500" />
+            <div className="flex items-center justify-between gap-3">
+              <div className="flex items-center gap-3 min-w-0">
+                <div className="h-9 w-9 rounded-xl bg-zinc-100 flex items-center justify-center shrink-0">
+                  <FileText className="h-4 w-4 text-zinc-500" />
+                </div>
+                <div className="min-w-0">
+                  <SheetTitle className="text-base font-semibold text-zinc-900">
+                    Detalhe da Ficha
+                  </SheetTitle>
+                  <SheetDescription className="text-[12px] text-zinc-500 mt-0.5 truncate">
+                    {fichaDetalhe?.periodo.nome}
+                  </SheetDescription>
+                </div>
               </div>
-              <div>
-                <SheetTitle className="text-base font-semibold text-zinc-900">
-                  Detalhe da Ficha
-                </SheetTitle>
-                <SheetDescription className="text-[12px] text-zinc-500 mt-0.5">
-                  {fichaDetalhe?.periodo.nome}
-                </SheetDescription>
-              </div>
+              {/* Botão download — só quando ficha está avaliada */}
+              {fichaDetalhe &&
+                fichaDetalhe.estado !== 'Pendente' &&
+                fichaDetalhe.avaliado && (
+                  <DownloadButton
+                    fichaId={fichaDetalhe.id}
+                    mecanografico={fichaDetalhe.avaliado.numeroMecanografico}
+                    periodoNome={fichaDetalhe.periodo.nome}
+                  />
+                )}
             </div>
           </SheetHeader>
+
           <div className="flex-1 overflow-y-auto px-6 py-5 space-y-5">
             {loadingSheet ? (
               Array.from({ length: 4 }).map((_, i) => (
@@ -536,7 +581,7 @@ export function FichasBase({ modo }: { modo: 'fichas' | 'historico' }) {
                     const est = estadoConfig[fichaDetalhe.estado]
                     return est ? (
                       <span
-                        className={`inline-flex items-center px-2.5 py-1 rounded-full text-xs font-semibold border ${est.class}`}
+                        className={`inline-flex items-center px-2.5 py-1 rounded-full text-xs font-semibold border ${est.cls}`}
                       >
                         {est.label}
                       </span>
@@ -560,127 +605,111 @@ export function FichasBase({ modo }: { modo: 'fichas' | 'historico' }) {
                         Pontuação Final
                       </p>
                       <p className="text-xs text-emerald-600 mt-0.5">
-                        Validado pelo Director
+                        Média ponderada dos critérios
                       </p>
                     </div>
                   </div>
                 )}
 
-                {/* Submissões */}
+                {/* Submissão do chefe */}
                 <div>
                   <p className="text-[10px] font-bold text-zinc-400 uppercase tracking-[0.12em] mb-3">
-                    Submissões ({fichaDetalhe.submissoes.length})
+                    Avaliação do chefe
                   </p>
-                  {fichaDetalhe.submissoes.length === 0 ? (
+                  {!fichaDetalhe.submissao ? (
                     <p className="text-sm text-zinc-400">
-                      Sem submissões ainda.
+                      Sem avaliação submetida ainda.
                     </p>
                   ) : (
-                    <div className="space-y-3">
-                      {fichaDetalhe.submissoes.map((s) => (
-                        <div
-                          key={s.id}
-                          className="rounded-xl border border-zinc-200 p-4 bg-white"
-                        >
-                          <div className="flex items-center justify-between mb-2">
-                            <span className="text-xs font-semibold text-zinc-700 bg-zinc-100 px-2 py-0.5 rounded-md">
-                              {tipoLabel[s.tipo] ?? s.tipo}
-                            </span>
-                            <div className="flex items-center gap-2">
-                              {s.pontuacaoTotal != null && (
-                                <span className="text-sm font-bold text-zinc-900">
-                                  {s.pontuacaoTotal.toFixed(1)}
-                                  <span className="text-xs font-normal text-zinc-400">
-                                    {' '}
-                                    /5
-                                  </span>
-                                </span>
-                              )}
-                              <span className="text-[11px] text-zinc-400">
-                                {formatDate(s.dataSubmissao)}
+                    <div className="rounded-xl border border-zinc-200 p-4 bg-white space-y-3">
+                      <div className="flex items-center justify-between">
+                        <p className="text-xs text-zinc-500">
+                          Por:{' '}
+                          <span className="font-medium text-zinc-700">
+                            {fichaDetalhe.submissao.avaliador.nomeCompleto}
+                          </span>
+                        </p>
+                        <div className="flex items-center gap-2">
+                          {fichaDetalhe.submissao.pontuacaoTotal != null && (
+                            <span className="text-sm font-bold text-zinc-900">
+                              {fichaDetalhe.submissao.pontuacaoTotal.toFixed(1)}
+                              <span className="text-xs font-normal text-zinc-400">
+                                {' '}
+                                /5
                               </span>
-                            </div>
-                          </div>
-                          <p className="text-xs text-zinc-500 mb-2">
-                            Por:{' '}
-                            <span className="font-medium text-zinc-700">
-                              {s.avaliador.nomeCompleto}
                             </span>
-                          </p>
-                          {s.comentarios && (
-                            <p className="text-xs text-zinc-600 italic border-l-2 border-zinc-200 pl-2.5 mb-3">
-                              "{s.comentarios}"
-                            </p>
                           )}
-                          {s.respostas.length > 0 && (
-                            <div className="space-y-1.5 pt-1">
-                              {s.respostas.map((r) => (
-                                <div
-                                  key={r.id}
-                                  className="flex items-center justify-between text-xs"
-                                >
-                                  <span className="text-zinc-500 truncate max-w-[200px]">
-                                    {r.criterio.nome}
-                                  </span>
-                                  <div className="flex items-center gap-2 shrink-0">
-                                    <div className="flex gap-0.5">
-                                      {Array.from({ length: 5 }).map((_, i) => (
-                                        <div
-                                          key={i}
-                                          className={`h-1.5 w-4 rounded-full ${i < r.pontuacao ? 'bg-blue-500' : 'bg-zinc-200'}`}
-                                        />
-                                      ))}
-                                    </div>
-                                    <span className="text-zinc-600 font-semibold w-4 text-right">
-                                      {r.pontuacao}
-                                    </span>
-                                  </div>
-                                </div>
-                              ))}
-                            </div>
-                          )}
+                          <span className="text-[11px] text-zinc-400">
+                            {formatDate(fichaDetalhe.submissao.dataSubmissao)}
+                          </span>
                         </div>
-                      ))}
+                      </div>
+
+                      {fichaDetalhe.submissao.comentarios && (
+                        <p className="text-xs text-zinc-600 italic border-l-2 border-zinc-200 pl-2.5">
+                          "{fichaDetalhe.submissao.comentarios}"
+                        </p>
+                      )}
+
+                      {/* Respostas por critério */}
+                      {(fichaDetalhe.submissao.respostas ?? []).length > 0 && (
+                        <div className="space-y-1.5 pt-1">
+                          {fichaDetalhe.submissao.respostas.map((r) => (
+                            <div
+                              key={r.id}
+                              className="flex items-center justify-between text-xs"
+                            >
+                              <span className="text-zinc-500 truncate max-w-[200px]">
+                                {r.criterio.nome}
+                              </span>
+                              <div className="flex items-center gap-2 shrink-0">
+                                <div className="flex gap-0.5">
+                                  {Array.from({ length: 5 }).map((_, i) => (
+                                    <div
+                                      key={i}
+                                      className={`h-1.5 w-4 rounded-full ${i < r.pontuacao ? 'bg-blue-500' : 'bg-zinc-200'}`}
+                                    />
+                                  ))}
+                                </div>
+                                <span className="text-zinc-600 font-semibold w-4 text-right">
+                                  {r.pontuacao}
+                                </span>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      )}
                     </div>
                   )}
                 </div>
 
-                {/* Reavaliação */}
-                {fichaDetalhe.reavaliacao && (
-                  <div className="rounded-xl border border-amber-200 bg-amber-50 p-3.5">
-                    <div className="flex items-center justify-between mb-1.5">
-                      <p className="text-[10px] font-bold text-amber-600 uppercase tracking-[0.12em]">
-                        Reavaliação
-                      </p>
-                      <span
-                        className={`text-[11px] font-semibold px-2 py-0.5 rounded-full ${fichaDetalhe.reavaliacao.concluida ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-700'}`}
-                      >
-                        {fichaDetalhe.reavaliacao.concluida
-                          ? 'Concluída'
-                          : 'Pendente'}
-                      </span>
-                    </div>
-                    <p className="text-sm font-medium text-amber-800">
-                      Reavaliador:{' '}
-                      {fichaDetalhe.reavaliacao.reavaliador.nomeCompleto}
-                    </p>
-                  </div>
-                )}
-
                 {/* Validação */}
                 {fichaDetalhe.validacao && (
-                  <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-3.5">
-                    <p className="text-[10px] font-bold text-emerald-600 uppercase tracking-[0.12em] mb-1.5">
+                  <div
+                    className={`rounded-xl border p-3.5 ${fichaDetalhe.validacao.aprovado ? 'border-emerald-200 bg-emerald-50' : 'border-red-200 bg-red-50'}`}
+                  >
+                    <p
+                      className={`text-[10px] font-bold uppercase tracking-[0.12em] mb-1.5 ${fichaDetalhe.validacao.aprovado ? 'text-emerald-600' : 'text-red-500'}`}
+                    >
                       Validação do Director
                     </p>
-                    <p className="text-sm font-semibold text-emerald-800">
-                      {fichaDetalhe.validacao.director.nomeCompleto}
+                    <p
+                      className={`text-sm font-semibold ${fichaDetalhe.validacao.aprovado ? 'text-emerald-800' : 'text-red-700'}`}
+                    >
+                      {fichaDetalhe.validacao.aprovado
+                        ? '✓ Aprovado'
+                        : '✗ Rejeitado'}
                     </p>
-                    <p className="text-xs text-emerald-600 mt-0.5">
+                    <p
+                      className={`text-xs mt-0.5 ${fichaDetalhe.validacao.aprovado ? 'text-emerald-600' : 'text-red-500'}`}
+                    >
+                      {fichaDetalhe.validacao.director.nomeCompleto} ·{' '}
                       {formatDate(fichaDetalhe.validacao.dataValidacao)}
                     </p>
                     {fichaDetalhe.validacao.comentarios && (
-                      <p className="text-xs text-emerald-700 mt-2 italic border-l-2 border-emerald-300 pl-2.5">
+                      <p
+                        className={`text-xs mt-2 italic border-l-2 pl-2.5 ${fichaDetalhe.validacao.aprovado ? 'border-emerald-300 text-emerald-700' : 'border-red-300 text-red-600'}`}
+                      >
                         "{fichaDetalhe.validacao.comentarios}"
                       </p>
                     )}

@@ -1,0 +1,16 @@
+-- AlterTable
+ALTER TABLE `utilizador` ADD COLUMN `codigoPostal` VARCHAR(191) NULL,
+    ADD COLUMN `comuna` VARCHAR(191) NULL,
+    ADD COLUMN `dataNascimento` DATETIME(3) NULL,
+    ADD COLUMN `extensao` VARCHAR(191) NULL,
+    ADD COLUMN `genero` ENUM('Masculino', 'Feminino', 'Outro') NULL,
+    ADD COLUMN `localidade` VARCHAR(191) NULL,
+    ADD COLUMN `morada` VARCHAR(191) NULL,
+    ADD COLUMN `municipio` VARCHAR(191) NULL,
+    ADD COLUMN `nacionalidade` VARCHAR(191) NULL,
+    ADD COLUMN `naturalidade` VARCHAR(191) NULL,
+    ADD COLUMN `nomeAbreviado` VARCHAR(191) NULL,
+    ADD COLUMN `pais` VARCHAR(191) NULL DEFAULT 'Angola',
+    ADD COLUMN `provincia` VARCHAR(191) NULL,
+    ADD COLUMN `telefone` VARCHAR(191) NULL,
+    ADD COLUMN `telemovel` VARCHAR(191) NULL;

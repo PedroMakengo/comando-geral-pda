@@ -87,10 +87,10 @@ export default function Login() {
         <div className="mb-10 text-center">
           <div className="mb-5 inline-flex h-12 w-50 items-center justify-center ">
             <Image
-              src="/logo.png"
-              width={150}
+              src="/logo-auth.png"
+              width={100}
               height={50}
-              className="w-20"
+              className="w-25"
               alt="Logo"
             />
           </div>
